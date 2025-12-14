@@ -17,6 +17,12 @@
         "files.insertFinalNewline": true,
     },
     "cSpell.words": [
-        "signalrr"
+        "messagepack",
+        "msgpack",
+        "rmpv",
+        "serde",
+        "signalr",
+        "signalrr",
+        "thiserror"
     ],
 }
