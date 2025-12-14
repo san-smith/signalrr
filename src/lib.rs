@@ -1,14 +1,22 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! Rust client for ASP.NET Core SignalR.
+//!
+//! This crate provides a low-level implementation of the SignalR hub protocol,
+//! with support for MessagePack serialization, streaming, and WebAssembly.
+//!
+//! # Quick start
+//!
+//! ```rust
+//! use signalr::protocol::{Frame, MessagePackCodec};
+//!
+//! let frame = Frame::HandshakeRequest {
+//!     protocol: "messagepack".into(),
+//!     version: 1,
+//! };
+//! let bytes = MessagePackCodec::encode(&frame).unwrap();
+//! let decoded = MessagePackCodec::decode(&bytes).unwrap();
+//! ```
+//!
+//! For high-level client usage, see the [`SignalRClient`] builder (coming soon).
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub mod protocol;
+pub use protocol::{Frame, MessagePackCodec, SignalRProtocolError};
