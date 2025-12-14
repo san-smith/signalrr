@@ -1,0 +1,22 @@
+{
+    "cSpell.language": "en,ru",
+    "editor.codeActionsOnSave": {
+        "editor.formatOnSave": "always",
+        "source.organizeImports": "always",
+        "source.sortImports": "always",
+        "source.fixAll": "always"
+    },
+    "files.trimTrailingWhitespace": true,
+    "files.trimFinalNewlines": true,
+    "[markdown]": {
+        "editor.formatOnSave": true,
+        "files.insertFinalNewline": true,
+    },
+    "[rust]": {
+        "editor.formatOnSave": true,
+        "files.insertFinalNewline": true,
+    },
+    "cSpell.words": [
+        "signalrr"
+    ],
+}

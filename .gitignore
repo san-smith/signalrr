@@ -1,0 +1,11 @@
+# Rust
+/target
+Cargo.lock
+**/Cargo.lock
+
+# WASM
+/pkg/
+.wasm-pack/
+
+# macOS
+.DS_Store

@@ -1,0 +1,11 @@
+[package]
+name = "signalrr"
+version = "0.0.0"
+edition = "2024"
+description = "Rust client for ASP.NET Core SignalR with MessagePack and WASM support"
+repository = "https://github.com/san-smith/signalrr"
+license = "MIT OR Apache-2.0"
+keywords = ["signalr", "websocket", "messagepack", "realtime", "wasm"]
+categories = ["network-programming", "api-bindings"]
+
+[dependencies]
