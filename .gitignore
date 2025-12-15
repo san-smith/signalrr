@@ -3,6 +3,10 @@
 Cargo.lock
 **/Cargo.lock
 
+# C#
+**/bin/
+**/obj/
+
 # WASM
 /pkg/
 .wasm-pack/

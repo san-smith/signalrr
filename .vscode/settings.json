@@ -19,10 +19,12 @@
     "cSpell.words": [
         "messagepack",
         "msgpack",
+        "reqwest",
         "rmpv",
         "serde",
         "signalr",
         "signalrr",
-        "thiserror"
+        "thiserror",
+        "tungstenite"
     ],
 }

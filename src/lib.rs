@@ -5,18 +5,22 @@
 //!
 //! # Quick start
 //!
-//! ```rust
-//! use signalr::protocol::{Frame, MessagePackCodec};
+//! ```no_run
+//! use signalrr::SignalRClient;
 //!
-//! let frame = Frame::HandshakeRequest {
-//!     protocol: "messagepack".into(),
-//!     version: 1,
-//! };
-//! let bytes = MessagePackCodec::encode(&frame).unwrap();
-//! let decoded = MessagePackCodec::decode(&bytes).unwrap();
+//! #[tokio::main]
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let mut client = SignalRClient::new("http://localhost:5000/chathub");
+//!     client.start().await?;
+//!     println!("Connected!");
+//!     Ok(())
+//! }
 //! ```
-//!
-//! For high-level client usage, see the [`SignalRClient`] builder (coming soon).
+
+mod connection;
+mod error;
+mod negotiate;
 
 pub mod protocol;
+pub use connection::SignalRClient;
 pub use protocol::{Frame, MessagePackCodec, SignalRProtocolError};
