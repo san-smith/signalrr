@@ -105,3 +105,54 @@ impl MessageBus {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+
+    #[tokio::test]
+    async fn test_register_and_dispatch_handler() {
+        let (bus, _rx) = MessageBus::new();
+        let target = "TestEvent".to_string();
+        let args = vec![Value::String("hello".to_string())];
+
+        // Флаг для проверки вызова
+        let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let called_clone = called.clone();
+
+        let args_clone = args.clone();
+        bus.register_handler(target.clone(), move |received_args| {
+            assert_eq!(received_args, args_clone);
+            called_clone.store(true, std::sync::atomic::Ordering::Relaxed);
+        })
+        .await;
+
+        bus.dispatch_invocation(target, args).await;
+
+        // Даем время обработчику выполниться
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        assert!(called.load(std::sync::atomic::Ordering::Relaxed));
+    }
+
+    #[tokio::test]
+    async fn test_register_and_complete_invocation() {
+        let (bus, _rx) = MessageBus::new();
+        let id = "test_id".to_string();
+        let result = Ok(Value::String("success".to_string()));
+
+        let rx = bus.register_pending(id.clone()).await.unwrap();
+        bus.complete_invocation(id, result.clone()).await;
+
+        let received = rx.await.unwrap();
+        assert_eq!(received, result);
+    }
+
+    #[tokio::test]
+    async fn test_complete_nonexistent_invocation() {
+        let (bus, _rx) = MessageBus::new();
+        // Должно завершиться без паники
+        bus.complete_invocation("nonexistent".to_string(), Ok(Value::Null))
+            .await;
+    }
+}
