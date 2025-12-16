@@ -1,3 +1,4 @@
+use futures_channel::oneshot::Canceled;
 use thiserror::Error;
 
 /// Errors that can occur in the SignalR client.
@@ -23,4 +24,25 @@ pub enum SignalRError {
 
     #[error("Not connected")]
     NotConnected,
+
+    #[error("Invocation canceled")]
+    Canceled,
+
+    #[error("Invocation error: {0}")]
+    InvocationError(String),
+
+    #[error("JSON error: {0}")]
+    JsonError(#[from] serde_json::Error),
+}
+
+impl From<Canceled> for SignalRError {
+    fn from(_: Canceled) -> Self {
+        SignalRError::Canceled
+    }
+}
+
+impl From<String> for SignalRError {
+    fn from(s: String) -> Self {
+        SignalRError::InvocationError(s)
+    }
 }
