@@ -14,7 +14,7 @@ use crate::{
     protocol::{Frame, MessagePackCodec},
 };
 use futures_channel::mpsc::UnboundedReceiver;
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{SinkExt, Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
@@ -188,6 +188,12 @@ impl Connection {
                                 Frame::Ping => {
                                     // Optionally respond with Pong
                                 }
+                                Frame::StreamItem {
+                                    invocation_id,
+                                    item,
+                                } => {
+                                    bus.send_stream_item(invocation_id, Ok(item)).await;
+                                }
                                 _ => {}
                             }
                         }
@@ -233,6 +239,64 @@ impl Connection {
         F: Fn(Vec<Value>) + Send + Sync + 'static,
     {
         self.bus.register_handler(method.to_string(), handler).await;
+    }
+
+    /// Invokes a server method that returns a stream of values.
+    ///
+    /// # Arguments
+    ///
+    /// * `method` - The name of the streaming hub method.
+    /// * `args` - Arguments to pass to the method.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(impl Stream<Item = Result<R, SignalRError>>)` - A stream of values.
+    /// * `Err(SignalRError)` - If the invocation fails to start.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # async fn example(conn: &signalrr::connection::Connection) -> Result<(), Box<dyn std::error::Error>> {
+    /// use futures_util::StreamExt;
+    /// let mut stream = conn.invoke_stream::<_, i32>("GetNumbers", &()).await?;
+    /// while let Some(item) = stream.next().await {
+    ///     println!("Number: {}", item?);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn invoke_stream<T: Serialize, R: for<'de> Deserialize<'de> + Send + 'static>(
+        &self,
+        method: &str,
+        args: &[T],
+    ) -> Result<impl Stream<Item = Result<R, SignalRError>> + Unpin + Send, SignalRError> {
+        let invocation_id = uuid::Uuid::new_v4().to_string();
+        let json_args: Vec<Value> = args
+            .iter()
+            .map(|a| serde_json::to_value(a).unwrap())
+            .collect();
+
+        let rx = self.bus.register_stream(invocation_id.clone()).await?;
+
+        let frame = Frame::Invocation {
+            invocation_id: Some(invocation_id), // ← важно: Some для стримов!
+            target: method.to_string(),
+            arguments: json_args,
+        };
+        let payload = MessagePackCodec::encode(&frame)?;
+        self.ws_stream
+            .write()
+            .await
+            .send(Message::Binary(payload))
+            .await?;
+
+        // Преобразуем mpsc-Receiver в Stream с нужной обработкой ошибок
+        let stream = rx.map(|res| {
+            res.map_err(SignalRError::from)
+                .and_then(|v| serde_json::from_value(v).map_err(SignalRError::from))
+        });
+
+        Ok(stream)
     }
 }
 

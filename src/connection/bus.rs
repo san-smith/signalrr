@@ -16,11 +16,12 @@ use tokio::sync::RwLock;
 
 /// A pending invocation awaiting a response from the server.
 ///
-/// Currently supports only single-result invocations.
-/// Streaming invocations will be added in Phase 4.
+/// Supports both single-result and streaming invocations.
 pub enum PendingInvocation {
     /// Awaiting a single `Completion` message.
     Single(oneshot::Sender<Result<Value, String>>),
+    /// Receiving a stream of `StreamItem` messages until `Completion`.
+    Stream(mpsc::UnboundedSender<Result<Value, String>>),
 }
 
 /// Events received from the SignalR server.
@@ -93,8 +94,20 @@ impl MessageBus {
 
     /// Completes a pending invocation with a result or error.
     pub async fn complete_invocation(&self, id: String, result: Result<Value, String>) {
-        if let Some(PendingInvocation::Single(tx)) = self.pending.write().await.remove(&id) {
-            let _ = tx.send(result);
+        if let Some(pending) = self.pending.write().await.remove(&id) {
+            match pending {
+                PendingInvocation::Single(tx) => {
+                    let _ = tx.send(result);
+                }
+                PendingInvocation::Stream(tx) => {
+                    // Для стрима: отправляем ошибку или завершаем канал
+                    if result.is_err() {
+                        let _ = tx.unbounded_send(result);
+                    }
+                    // Успешное завершение: отправляем `None` через отдельный канал
+                    // Но в текущей модели — просто закрываем канал
+                }
+            }
         }
     }
 
@@ -104,11 +117,34 @@ impl MessageBus {
             handler(arguments);
         }
     }
+
+    /// Registers a pending streaming invocation and returns a receiver for stream items.
+    ///
+    /// The receiver will yield items until the server sends a `Completion` message.
+    pub async fn register_stream(
+        &self,
+        id: String,
+    ) -> Result<mpsc::UnboundedReceiver<Result<Value, String>>, SignalRError> {
+        let (tx, rx) = mpsc::unbounded();
+        self.pending
+            .write()
+            .await
+            .insert(id, PendingInvocation::Stream(tx));
+        Ok(rx)
+    }
+
+    /// Sends a stream item to a pending streaming invocation.
+    pub async fn send_stream_item(&self, id: String, item: Result<Value, String>) {
+        if let Some(PendingInvocation::Stream(tx)) = self.pending.read().await.get(&id) {
+            let _ = tx.unbounded_send(item);
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_util::StreamExt;
     use serde_json::Value;
 
     #[tokio::test]
@@ -154,5 +190,50 @@ mod tests {
         // Должно завершиться без паники
         bus.complete_invocation("nonexistent".to_string(), Ok(Value::Null))
             .await;
+    }
+
+    #[tokio::test]
+    async fn test_register_and_stream_items() {
+        let (bus, _rx) = MessageBus::new();
+        let id = "stream_id".to_string();
+
+        let rx = bus.register_stream(id.clone()).await.unwrap();
+
+        // Отправляем элементы
+        bus.send_stream_item(id.clone(), Ok(Value::Number(42.into())))
+            .await;
+        bus.send_stream_item(id.clone(), Ok(Value::String("done".to_string())))
+            .await;
+
+        // Получаем элементы
+        let mut items = Vec::new();
+        let mut rx = rx;
+        if let Ok(item) = rx.try_next() {
+            items.push(item.unwrap());
+        }
+        if let Ok(item) = rx.try_next() {
+            items.push(item.unwrap());
+        }
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0], Ok(Value::Number(42.into())));
+        assert_eq!(items[1], Ok(Value::String("done".to_string())));
+    }
+
+    #[tokio::test]
+    async fn test_stream_completion() {
+        let (bus, _rx) = MessageBus::new();
+        let id = "stream_id".to_string();
+
+        let mut rx = bus.register_stream(id.clone()).await.unwrap();
+
+        // Завершаем стрим с ошибкой
+        bus.complete_invocation(id, Err("Stream failed".to_string()))
+            .await;
+
+        // Получаем первый (и единственный) элемент — ошибку завершения
+        let result = rx.next().await.unwrap();
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Stream failed");
     }
 }
