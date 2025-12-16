@@ -8,13 +8,14 @@
 pub mod bus;
 pub mod manager;
 
-use crate::connection::bus::{MessageBus, ServerEvent};
+use crate::connection::bus::MessageBus;
+#[cfg(feature = "compression")]
+use crate::transport::PayloadCodec;
 use crate::{
     error::SignalRError,
     negotiate::negotiate,
     protocol::{Frame, MessagePackCodec},
 };
-use futures_channel::mpsc::UnboundedReceiver;
 use futures_util::{SinkExt, Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -26,7 +27,7 @@ use tokio_tungstenite::{
     connect_async,
     tungstenite::{Message, client::IntoClientRequest},
 };
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info};
 
 /// The state of a SignalR connection.
 #[derive(Debug, Clone, PartialEq)]
@@ -51,6 +52,8 @@ pub enum ConnectionState {
 pub struct Connection {
     ws_stream: Arc<RwLock<WebSocketStream<MaybeTlsStream<TcpStream>>>>,
     bus: MessageBus,
+    #[cfg(feature = "compression")]
+    payload_codec: PayloadCodec,
 }
 
 impl Connection {
@@ -76,7 +79,10 @@ impl Connection {
     /// # Ok(())
     /// # }
     ///
-    pub async fn connect(hub_url: &str) -> Result<Self, SignalRError> {
+    pub async fn connect(
+        hub_url: &str,
+        #[cfg(feature = "compression")] payload_codec: PayloadCodec,
+    ) -> Result<Self, SignalRError> {
         info!("Connecting to SignalR hub: {}", hub_url);
         let hub_url_parsed = url::Url::parse(hub_url)?;
 
@@ -162,6 +168,8 @@ impl Connection {
         let conn = Self {
             ws_stream: ws_stream.clone(),
             bus,
+            #[cfg(feature = "compression")]
+            payload_codec,
         };
         conn.spawn_reader(ws_stream);
         Ok(conn)
@@ -169,6 +177,8 @@ impl Connection {
 
     fn spawn_reader(&self, ws_stream: Arc<RwLock<WebSocketStream<MaybeTlsStream<TcpStream>>>>) {
         let bus = self.bus.clone();
+        #[cfg(feature = "compression")]
+        let payload_codec = self.payload_codec.clone();
 
         tokio::spawn(async move {
             loop {
@@ -178,7 +188,19 @@ impl Connection {
                 };
                 match msg {
                     Some(Ok(Message::Binary(data))) => {
-                        if let Ok(frame) = MessagePackCodec::decode(&data) {
+                        // decompression (if enabled)
+                        #[cfg(feature = "compression")]
+                        let payload_bytes = match payload_codec.decode(data) {
+                            Ok(decompressed) => decompressed,
+                            Err(e) => {
+                                error!("Decompression failed: {}", e);
+                                continue;
+                            }
+                        };
+                        #[cfg(not(feature = "compression"))]
+                        let payload_bytes = data;
+
+                        if let Ok(frame) = MessagePackCodec::decode(&payload_bytes) {
                             match frame {
                                 Frame::Invocation {
                                     invocation_id,
@@ -242,11 +264,7 @@ impl Connection {
             arguments: json_args,
         };
         let payload = MessagePackCodec::encode(&frame)?;
-        self.ws_stream
-            .write()
-            .await
-            .send(Message::Binary(payload))
-            .await?;
+        self.send_payload(payload).await?;
 
         let result = rx.await??;
         Ok(serde_json::from_value(result)?)
@@ -302,11 +320,7 @@ impl Connection {
             arguments: json_args,
         };
         let payload = MessagePackCodec::encode(&frame)?;
-        self.ws_stream
-            .write()
-            .await
-            .send(Message::Binary(payload))
-            .await?;
+        self.send_payload(payload).await?;
 
         let stream = rx.map(|res| {
             res.map_err(SignalRError::from)
@@ -323,12 +337,22 @@ impl Connection {
             allow_reconnect: None,
         };
         let payload = MessagePackCodec::encode(&close_frame)?;
+        self.send_payload(payload).await?;
+        self.ws_stream.write().await.close(None).await?;
+        Ok(())
+    }
+
+    async fn send_payload(&self, payload: Vec<u8>) -> Result<(), SignalRError> {
+        #[cfg(feature = "compression")]
+        let final_payload = self.payload_codec.encode(payload)?;
+        #[cfg(not(feature = "compression"))]
+        let final_payload = payload;
+
         self.ws_stream
             .write()
             .await
-            .send(Message::Binary(payload))
+            .send(Message::Binary(final_payload))
             .await?;
-        self.ws_stream.write().await.close(None).await?;
         Ok(())
     }
 }
@@ -395,7 +419,7 @@ impl SignalRClient {
     ///     }
     /// }).await;
     /// # }
-    /// `
+    /// ```
     pub async fn on<F>(&mut self, method: &str, handler: F)
     where
         F: Fn(Vec<Value>) + Send + Sync + 'static,
@@ -410,6 +434,45 @@ impl SignalRClient {
     /// Returns the current connection state.
     pub async fn state(&self) -> ConnectionState {
         self.manager.state().await
+    }
+
+    pub fn builder(hub_url: &str) -> SignalRClientBuilder {
+        SignalRClientBuilder::new(hub_url)
+    }
+}
+
+pub struct SignalRClientBuilder {
+    hub_url: String,
+    #[cfg(feature = "compression")]
+    payload_codec: PayloadCodec,
+}
+
+impl SignalRClientBuilder {
+    pub fn new(hub_url: &str) -> Self {
+        Self {
+            hub_url: hub_url.to_string(),
+            #[cfg(feature = "compression")]
+            payload_codec: PayloadCodec::default(),
+        }
+    }
+
+    #[cfg(feature = "compression")]
+    pub fn with_brotli_compression(mut self, quality: u32) -> Self {
+        self.payload_codec = PayloadCodec::Brotli { quality };
+        self
+    }
+
+    #[cfg(feature = "compression")]
+    pub fn with_gzip_compression(mut self) -> Self {
+        self.payload_codec = PayloadCodec::Gzip;
+        self
+    }
+
+    pub async fn build(self) -> Result<SignalRClient, SignalRError> {
+        let manager = manager::ConnectionManager::new(self.hub_url);
+        #[cfg(feature = "compression")]
+        manager.set_payload_codec(self.payload_codec);
+        Ok(SignalRClient { manager })
     }
 }
 

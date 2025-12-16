@@ -10,6 +10,8 @@
 //! The manager ensures the client remains connected even in unstable network
 //! conditions.
 
+#[cfg(feature = "compression")]
+use crate::transport::PayloadCodec;
 use crate::{
     connection::{Connection, ConnectionState},
     error::SignalRError,
@@ -29,6 +31,8 @@ pub struct ConnectionManager {
     state: Arc<RwLock<ConnectionState>>,
     shutdown_tx: Option<broadcast::Sender<()>>,
     connection: Option<Connection>,
+    #[cfg(feature = "compression")]
+    payload_codec: PayloadCodec,
 }
 
 /// Manages the lifecycle of a SignalR connection with automatic reconnect.
@@ -61,7 +65,14 @@ impl ConnectionManager {
             state: Arc::new(RwLock::new(ConnectionState::Disconnected)),
             shutdown_tx: Some(shutdown_tx),
             connection: None,
+            #[cfg(feature = "compression")]
+            payload_codec: PayloadCodec::default(),
         }
+    }
+
+    #[cfg(feature = "compression")]
+    pub fn set_payload_codec(&mut self, codec: PayloadCodec) {
+        self.payload_codec = codec;
     }
 
     /// Starts the connection with automatic reconnect.
@@ -75,7 +86,13 @@ impl ConnectionManager {
 
     async fn connect_with_retries(&mut self, mut attempts: u32) -> Result<(), SignalRError> {
         loop {
-            match Connection::connect(&self.hub_url).await {
+            match Connection::connect(
+                &self.hub_url,
+                #[cfg(feature = "compression")]
+                self.payload_codec.clone(),
+            )
+            .await
+            {
                 Ok(conn) => {
                     *self.state.write().await = ConnectionState::Connected;
                     self.connection = Some(conn);

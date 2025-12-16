@@ -20,6 +20,7 @@
 mod connection;
 mod error;
 mod negotiate;
+mod transport;
 
 pub mod protocol;
 pub use connection::SignalRClient;
