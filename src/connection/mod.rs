@@ -6,6 +6,7 @@
 //! - Graceful shutdown.
 
 pub mod bus;
+pub mod manager;
 
 use crate::connection::bus::{MessageBus, ServerEvent};
 use crate::{
@@ -25,15 +26,31 @@ use tokio_tungstenite::{
     connect_async,
     tungstenite::{Message, client::IntoClientRequest},
 };
+use tracing::{debug, error, info, warn};
+
+/// The state of a SignalR connection.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConnectionState {
+    /// No connection attempt has been made.
+    Disconnected,
+    /// Connection is in progress.
+    Connecting,
+    /// Connection is active.
+    Connected,
+    /// Connection lost, attempting to reconnect.
+    Reconnecting { attempts: u32 },
+    /// Connection is closed and will not reconnect.
+    Closed,
+}
 
 /// A SignalR client connection.
 ///
 /// This struct represents an active connection to a SignalR hub.
 /// It handles the WebSocket stream and protocol handshake.
+#[derive(Clone)]
 pub struct Connection {
     ws_stream: Arc<RwLock<WebSocketStream<MaybeTlsStream<TcpStream>>>>,
     bus: MessageBus,
-    _event_rx: UnboundedReceiver<ServerEvent>,
 }
 
 impl Connection {
@@ -60,6 +77,7 @@ impl Connection {
     /// # }
     ///
     pub async fn connect(hub_url: &str) -> Result<Self, SignalRError> {
+        info!("Connecting to SignalR hub: {}", hub_url);
         let hub_url_parsed = url::Url::parse(hub_url)?;
 
         let connection_id = negotiate(&hub_url_parsed).await?;
@@ -77,19 +95,18 @@ impl Connection {
         let mut ws_url = url::Url::parse(&ws_url_str)?;
         ws_url.query_pairs_mut().append_pair("id", &connection_id);
 
-        println!("WebSocket URL: {}", ws_url);
+        debug!("WebSocket URL: {}", ws_url);
 
         let request = ws_url.as_str().into_client_request()?;
         let (mut ws_stream, _) = connect_async(request).await?;
 
-        // --- Handshake performed BEFORE wrapping in Arc<RwLock> ---
+        // Handshake
         let handshake = Frame::HandshakeRequest {
             protocol: "messagepack".to_string(),
             version: 1,
         };
         let payload = MessagePackCodec::encode(&handshake)?;
         ws_stream.send(Message::Binary(payload)).await?;
-        println!("✅ Handshake sent");
 
         let timeout = tokio::time::sleep(tokio::time::Duration::from_secs(15));
         tokio::pin!(timeout);
@@ -103,7 +120,7 @@ impl Connection {
                             let frame = MessagePackCodec::decode(&data)?;
                             match frame {
                                 Frame::HandshakeResponse { error: None } => {
-                                    println!("✅ HandshakeResponse received");
+                                    info!("Handshake received");
                                     handshake_complete = true;
                                     break;
                                 }
@@ -139,13 +156,12 @@ impl Connection {
             ));
         }
 
-        // --- Now wrap in Arc<RwLock> for shared access ---
+        // Wrap and start reader
         let ws_stream = Arc::new(RwLock::new(ws_stream));
-        let (bus, event_rx) = MessageBus::new();
+        let (bus, _event_rx) = MessageBus::new();
         let conn = Self {
             ws_stream: ws_stream.clone(),
             bus,
-            _event_rx: event_rx,
         };
         conn.spawn_reader(ws_stream);
         Ok(conn)
@@ -169,6 +185,7 @@ impl Connection {
                                     target,
                                     arguments,
                                 } => {
+                                    debug!("Received Invocation: target={}", target);
                                     if invocation_id.is_none() {
                                         bus.dispatch_invocation(target, arguments).await;
                                     }
@@ -178,6 +195,7 @@ impl Connection {
                                     result,
                                     error,
                                 } => {
+                                    debug!("Received Completion: id={}", invocation_id);
                                     let res = if let Some(err) = error {
                                         Err(err)
                                     } else {
@@ -186,7 +204,7 @@ impl Connection {
                                     bus.complete_invocation(invocation_id, res).await;
                                 }
                                 Frame::Ping => {
-                                    // Optionally respond with Pong
+                                    // Pong already sent in handshake phase
                                 }
                                 Frame::StreamItem {
                                     invocation_id,
@@ -264,7 +282,7 @@ impl Connection {
     /// }
     /// # Ok(())
     /// # }
-    /// ```
+    ///
     pub async fn invoke_stream<T: Serialize, R: for<'de> Deserialize<'de> + Send + 'static>(
         &self,
         method: &str,
@@ -279,7 +297,7 @@ impl Connection {
         let rx = self.bus.register_stream(invocation_id.clone()).await?;
 
         let frame = Frame::Invocation {
-            invocation_id: Some(invocation_id), // ← важно: Some для стримов!
+            invocation_id: Some(invocation_id),
             target: method.to_string(),
             arguments: json_args,
         };
@@ -290,7 +308,6 @@ impl Connection {
             .send(Message::Binary(payload))
             .await?;
 
-        // Преобразуем mpsc-Receiver в Stream с нужной обработкой ошибок
         let stream = rx.map(|res| {
             res.map_err(SignalRError::from)
                 .and_then(|v| serde_json::from_value(v).map_err(SignalRError::from))
@@ -298,26 +315,38 @@ impl Connection {
 
         Ok(stream)
     }
+
+    pub async fn shutdown(&mut self) -> Result<(), SignalRError> {
+        info!("Shutting down SignalR connection");
+        let close_frame = Frame::Close {
+            error: None,
+            allow_reconnect: None,
+        };
+        let payload = MessagePackCodec::encode(&close_frame)?;
+        self.ws_stream
+            .write()
+            .await
+            .send(Message::Binary(payload))
+            .await?;
+        self.ws_stream.write().await.close(None).await?;
+        Ok(())
+    }
 }
 
 /// Main client for interacting with a SignalR hub.
 pub struct SignalRClient {
-    connection: Option<Connection>,
-    hub_url: String,
+    manager: manager::ConnectionManager,
 }
 
 impl SignalRClient {
     pub fn new(hub_url: &str) -> Self {
         Self {
-            connection: None,
-            hub_url: hub_url.to_string(),
+            manager: manager::ConnectionManager::new(hub_url.to_string()),
         }
     }
 
     pub async fn start(&mut self) -> Result<(), SignalRError> {
-        let conn = Connection::connect(&self.hub_url).await?;
-        self.connection = Some(conn);
-        Ok(())
+        self.manager.start().await
     }
 
     /// Invokes a method on the server and waits for the result.
@@ -346,11 +375,7 @@ impl SignalRClient {
         method: &str,
         args: &[T],
     ) -> Result<R, SignalRError> {
-        if let Some(conn) = &self.connection {
-            conn.invoke(method, args).await
-        } else {
-            Err(SignalRError::NotConnected)
-        }
+        self.manager.invoke(method, args).await
     }
 
     /// Registers a handler for server events.
@@ -370,13 +395,32 @@ impl SignalRClient {
     ///     }
     /// }).await;
     /// # }
-    /// ```
+    /// `
     pub async fn on<F>(&mut self, method: &str, handler: F)
     where
         F: Fn(Vec<Value>) + Send + Sync + 'static,
     {
-        if let Some(conn) = &self.connection {
-            conn.on(method, handler).await;
-        }
+        self.manager.on(method, handler).await.unwrap();
+    }
+
+    pub async fn shutdown(&mut self) -> Result<(), SignalRError> {
+        self.manager.shutdown().await
+    }
+
+    /// Returns the current connection state.
+    pub async fn state(&self) -> ConnectionState {
+        self.manager.state().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ConnectionState;
+
+    #[test]
+    fn test_connection_state_clone() {
+        let state = ConnectionState::Reconnecting { attempts: 3 };
+        let cloned = state.clone();
+        assert_eq!(state, cloned);
     }
 }
