@@ -7,6 +7,7 @@
 
 use crate::error::SignalRError;
 use serde::Deserialize;
+use tracing::debug;
 use url::Url;
 
 /// Response from the `/negotiate` endpoint.
@@ -41,10 +42,29 @@ pub struct NegotiateResponse {
 /// # }
 /// ```
 pub async fn negotiate(hub_url: &Url) -> Result<String, SignalRError> {
-    let negotiate_url = format!("{}/negotiate", hub_url);
+    let mut negotiate_url = hub_url.clone();
+
+    // Получаем путь и нормализуем его
+    let mut path = negotiate_url.path().to_string();
+    if path.ends_with('/') && path.len() > 1 {
+        path.pop(); // удаляем завершающий '/', но не если путь "/"
+    }
+    path.push_str("/negotiate");
+    negotiate_url.set_path(&path);
+
+    // Опционально: удаляем fragment (якорь), так как он не нужен для API
+    negotiate_url.set_fragment(None);
+
+    debug!("Negotiate URL: {}", negotiate_url);
+
     let client = reqwest::Client::new();
 
-    match client.post(&negotiate_url).send().await {
+    match client
+        .post(negotiate_url.as_str())
+        .header("Accept", "application/json")
+        .send()
+        .await
+    {
         Ok(response) => {
             let status = response.status();
             if status.is_success() {
@@ -53,13 +73,14 @@ pub async fn negotiate(hub_url: &Url) -> Result<String, SignalRError> {
                 Ok(raw.connection_id.unwrap_or_else(|| "local".to_string()))
             } else {
                 // Если сервер вернул 404 или 405 — negotiate не требуется
-                println!("Negotiate not required, using default connection ID");
+                debug!("Response text: {}", response.text().await?);
+                debug!("Negotiate not required, using default connection ID");
                 Ok("local".to_string())
             }
         }
         Err(e) => {
             // Если запрос к /negotiate не удался — тоже пропускаем
-            println!("Negotiate failed ({}), using default connection ID", e);
+            debug!("Negotiate failed ({}), using default connection ID", e);
             Ok("local".to_string())
         }
     }

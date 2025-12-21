@@ -27,7 +27,7 @@ use tokio_tungstenite::{
     connect_async,
     tungstenite::{Message, client::IntoClientRequest},
 };
-use tracing::{debug, info};
+use tracing::{debug, info, error};
 
 /// The state of a SignalR connection.
 #[derive(Debug, Clone, PartialEq)]
@@ -86,7 +86,9 @@ impl Connection {
         info!("Connecting to SignalR hub: {}", hub_url);
         let hub_url_parsed = url::Url::parse(hub_url)?;
 
+        debug!("Performing negotiate...");
         let connection_id = negotiate(&hub_url_parsed).await?;
+        debug!("Negotiated connection ID: {}", connection_id);
 
         let ws_scheme = if hub_url_parsed.scheme() == "https" {
             "wss"
@@ -104,7 +106,12 @@ impl Connection {
         debug!("WebSocket URL: {}", ws_url);
 
         let request = ws_url.as_str().into_client_request()?;
-        let (mut ws_stream, _) = connect_async(request).await?;
+        debug!("Connecting via WebSocket...");
+        let (mut ws_stream, _) = connect_async(request).await.map_err(|e| {
+            error!("WebSocket connection failed: {:?}", e);
+            SignalRError::WebSocket(e)
+        })?;
+        debug!("WebSocket connected!");
 
         // Handshake
         let handshake = Frame::HandshakeRequest {
