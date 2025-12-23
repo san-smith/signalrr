@@ -27,7 +27,7 @@ use tokio_tungstenite::{
     connect_async,
     tungstenite::{Message, client::IntoClientRequest},
 };
-use tracing::{debug, info, error};
+use tracing::{debug, error, info};
 
 /// The state of a SignalR connection.
 #[derive(Debug, Clone, PartialEq)]
@@ -86,26 +86,39 @@ impl Connection {
         info!("Connecting to SignalR hub: {}", hub_url);
         let hub_url_parsed = url::Url::parse(hub_url)?;
 
-        debug!("Performing negotiate...");
+        debug!("Performance negotiate...");
         let connection_id = negotiate(&hub_url_parsed).await?;
         debug!("Negotiated connection ID: {}", connection_id);
 
-        let ws_scheme = if hub_url_parsed.scheme() == "https" {
-            "wss"
-        } else {
-            "ws"
-        };
-        let host = hub_url_parsed.host_str().unwrap_or("localhost");
-        let port = hub_url_parsed
-            .port()
-            .map_or(String::new(), |p| format!(":{}", p));
-        let ws_url_str = format!("{}://{}{}{}", ws_scheme, host, port, hub_url_parsed.path());
-        let mut ws_url = url::Url::parse(&ws_url_str)?;
-        ws_url.query_pairs_mut().append_pair("id", &connection_id);
+        let mut ws_url = hub_url_parsed.clone();
+        ws_url
+            .set_scheme(if hub_url_parsed.scheme() == "https" {
+                "wss"
+            } else {
+                "ws"
+            })
+            .map_err(|_| SignalRError::HandshakeFailed("Invalid hub URL".to_string()))?;
+        let mut query_pairs: Vec<(String, String)> = ws_url
+            .query_pairs()
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect();
+        query_pairs.retain(|(key, _)| key != "negotiateVersion");
+
+        // Очищаем query и добавляем параметры обратно + id
+        ws_url.set_query(None);
+        {
+            let mut qp = ws_url.query_pairs_mut();
+            for (k, v) in query_pairs {
+                qp.append_pair(&k, &v);
+            }
+            qp.append_pair("id", &connection_id);
+        }
 
         debug!("WebSocket URL: {}", ws_url);
 
         let request = ws_url.as_str().into_client_request()?;
+        debug!("Request headers: {:?}", request.headers());
+
         debug!("Connecting via WebSocket...");
         let (mut ws_stream, _) = connect_async(request).await.map_err(|e| {
             error!("WebSocket connection failed: {:?}", e);
@@ -113,14 +126,17 @@ impl Connection {
         })?;
         debug!("WebSocket connected!");
 
-        // Handshake
+        // --- ШАГ 1: Отправляем HandshakeRequest ---
         let handshake = Frame::HandshakeRequest {
             protocol: "messagepack".to_string(),
             version: 1,
         };
         let payload = MessagePackCodec::encode(&handshake)?;
+
+        debug!("Sending handshake payload: {:?}", payload);
         ws_stream.send(Message::Binary(payload)).await?;
 
+        // --- ШАГ 2: Ждём HandshakeResponse от сервера и отправляем подтверждение ---
         let timeout = tokio::time::sleep(tokio::time::Duration::from_secs(15));
         tokio::pin!(timeout);
         let mut handshake_complete = false;
@@ -133,7 +149,14 @@ impl Connection {
                             let frame = MessagePackCodec::decode(&data)?;
                             match frame {
                                 Frame::HandshakeResponse { error: None } => {
-                                    info!("Handshake received");
+                                    info!("Handshake response received from server");
+
+                                    // Согласно спецификации ASP.NET Core SignalR:
+                                    // "After the server sends the handshake response, the client must send an empty message"
+                                    // Пустой массив [] в MessagePack = 0x90
+                                    let empty_handshake_response = vec![0x90];
+                                    ws_stream.send(Message::Binary(empty_handshake_response)).await?;
+
                                     handshake_complete = true;
                                     break;
                                 }
@@ -147,9 +170,12 @@ impl Connection {
                             ws_stream.send(Message::Pong(payload)).await?;
                         }
                         Some(Ok(Message::Pong(_))) => {}
-                        Some(Ok(Message::Text(_))) => {}
+                        Some(Ok(Message::Text(data))) => {
+                            debug!("Received text message: {}", data);
+                        }
                         Some(Ok(Message::Frame(_))) => {}
                         Some(Ok(Message::Close(close_frame))) => {
+                            debug!("Received close frame: {:?}", close_frame.clone());
                             let reason = close_frame.map(|f| f.reason.to_string()).unwrap_or_default();
                             return Err(SignalRError::HandshakeFailed(format!("Connection closed: {}", reason)));
                         }
@@ -169,7 +195,7 @@ impl Connection {
             ));
         }
 
-        // Wrap and start reader
+        // --- ШАГ 3: Запускаем фоновый reader ---
         let ws_stream = Arc::new(RwLock::new(ws_stream));
         let (bus, _event_rx) = MessageBus::new();
         let conn = Self {

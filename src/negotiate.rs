@@ -54,6 +54,7 @@ pub async fn negotiate(hub_url: &Url) -> Result<String, SignalRError> {
 
     // Опционально: удаляем fragment (якорь), так как он не нужен для API
     negotiate_url.set_fragment(None);
+    negotiate_url.set_query(hub_url.query());
 
     debug!("Negotiate URL: {}", negotiate_url);
 

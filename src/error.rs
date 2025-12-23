@@ -33,6 +33,12 @@ pub enum SignalRError {
 
     #[error("JSON error: {0}")]
     JsonError(#[from] serde_json::Error),
+
+    #[error("MessagePack serialization error: {0}")]
+    MessagePackEncode(#[from] rmp_serde::encode::Error),
+
+    #[error("MessagePack deserialization error: {0}")]
+    MessagePackDecode(#[from] rmp_serde::decode::Error),
 }
 
 impl From<Canceled> for SignalRError {
