@@ -497,7 +497,7 @@ impl HubConnection {
         let initial_messages = connection.initial_messages().to_vec();
         let (transport_events, events_rx) = mpsc::unbounded_channel();
 
-        let runtime = HubRuntime::start(HubRuntimeOptions {
+        let runtime = match HubRuntime::start(HubRuntimeOptions {
             transport,
             incoming,
             hub_protocol: self.options.hub_protocol.clone(),
@@ -508,12 +508,22 @@ impl HubConnection {
             bus: self.bus.clone(),
             message_buffer: self.message_buffer.read().await.clone(),
             transport_events,
-        })?;
+        }) {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                connection.close().await.ok();
+                return Err(error);
+            }
+        };
 
-        runtime.send_initial_ping().await?;
+        if let Err(error) = runtime.send_initial_ping().await {
+            runtime.shutdown().await.ok();
+            return Err(error);
+        }
 
-        if is_reconnect {
-            runtime.resend_buffered_messages().await?;
+        if is_reconnect && let Err(error) = runtime.resend_buffered_messages().await {
+            runtime.shutdown().await.ok();
+            return Err(error);
         }
 
         *self.runtime.write().await = Some(runtime);
@@ -692,7 +702,7 @@ async fn reconnect_once(
     let initial_messages = connection.initial_messages().to_vec();
     let (transport_events, events_rx) = mpsc::unbounded_channel();
 
-    let hub_runtime = HubRuntime::start(HubRuntimeOptions {
+    let hub_runtime = match HubRuntime::start(HubRuntimeOptions {
         transport,
         incoming,
         hub_protocol: options.hub_protocol.clone(),
@@ -703,10 +713,24 @@ async fn reconnect_once(
         bus: bus.clone(),
         message_buffer: message_buffer.read().await.clone(),
         transport_events,
-    })?;
+    }) {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            connection.close().await.ok();
+            return Err(error);
+        }
+    };
 
-    hub_runtime.send_initial_ping().await?;
-    hub_runtime.resend_buffered_messages().await?;
+    if let Err(error) = hub_runtime.send_initial_ping().await {
+        hub_runtime.shutdown().await.ok();
+        return Err(error);
+    }
+
+    if let Err(error) = hub_runtime.resend_buffered_messages().await {
+        hub_runtime.shutdown().await.ok();
+        return Err(error);
+    }
+
     *runtime.write().await = Some(hub_runtime);
     Ok(events_rx)
 }

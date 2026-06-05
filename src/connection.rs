@@ -72,7 +72,6 @@ impl ConnectionOptions {
 }
 
 /// Established SignalR transport connection.
-#[allow(dead_code)]
 pub struct Connection {
     base_url: String,
     connection_id: Option<String>,
