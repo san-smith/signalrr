@@ -18,8 +18,13 @@ use crate::hub::protocol::{HubProtocol, HubProtocolInput};
 use crate::hub_connection::DEFAULT_STATEFUL_RECONNECT_BUFFER_SIZE;
 use crate::hub_connection::retry::RetryPolicy;
 use crate::hub_connection::runtime::{DEFAULT_KEEP_ALIVE_INTERVAL, DEFAULT_SERVER_TIMEOUT};
-use crate::negotiate::{NegotiateOptions, NegotiateResult, build_websocket_url, negotiate};
-use crate::transport::{TransferFormat, TransportMessage, WebSocketTransport};
+use crate::negotiate::{
+    NegotiateOptions, NegotiateResult, build_websocket_url, negotiate_with_client,
+};
+use crate::transport::{
+    TransferFormat, TransportMessage, WebSocketConnectOptions, WebSocketTransport,
+};
+use reqwest::Client;
 
 const DEFAULT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -38,6 +43,8 @@ pub struct ConnectionOptions {
     pub keep_alive_interval: Duration,
     pub reconnect_policy: Option<Arc<dyn RetryPolicy>>,
     pub stateful_reconnect_buffer_size: usize,
+    pub http_client: Option<Client>,
+    pub log_message_content: bool,
 }
 
 impl ConnectionOptions {
@@ -58,6 +65,8 @@ impl ConnectionOptions {
             keep_alive_interval: DEFAULT_KEEP_ALIVE_INTERVAL,
             reconnect_policy: None,
             stateful_reconnect_buffer_size: DEFAULT_STATEFUL_RECONNECT_BUFFER_SIZE,
+            http_client: None,
+            log_message_content: false,
         }
     }
 }
@@ -82,12 +91,21 @@ impl Connection {
         let NegotiateResult {
             response,
             access_token: negotiate_access_token,
-        } = negotiate(
-            &options.base_url,
-            &options.negotiate,
-            access_token.as_deref(),
-        )
-        .await?;
+        } = {
+            let client = options.http_client.clone().unwrap_or_else(|| {
+                Client::builder()
+                    .timeout(options.negotiate.timeout)
+                    .build()
+                    .expect("default HTTP client should build")
+            });
+            negotiate_with_client(
+                &options.base_url,
+                &options.negotiate,
+                &client,
+                access_token.as_deref(),
+            )
+            .await?
+        };
 
         let effective_access_token = negotiate_access_token.or(access_token);
         let connection_token = response.websocket_token()?.to_string();
@@ -99,8 +117,15 @@ impl Connection {
         )?;
 
         debug!(url = %websocket_url, "starting websocket transport");
-        let (transport, mut incoming) =
-            WebSocketTransport::connect(&websocket_url, effective_access_token.as_deref()).await?;
+        let (mut transport, mut incoming) = WebSocketTransport::connect_with_options(
+            &websocket_url,
+            effective_access_token.as_deref(),
+            WebSocketConnectOptions {
+                log_message_content: options.log_message_content,
+            },
+        )
+        .await?;
+        transport.enable_send_queue();
 
         let handshake_request = HandshakeRequest {
             protocol: options.handshake_request.protocol.clone(),

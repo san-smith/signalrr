@@ -56,5 +56,10 @@ pub use hub_connection::{
     HubConnectionState, HubMethodStream, ReconnectedCallback, ReconnectingCallback, RetryContext,
     RetryPolicy, TransportCloseInfo,
 };
-pub use negotiate::{NegotiateOptions, NegotiateResponse, NegotiateResult, negotiate};
-pub use transport::{TransferFormat, TransportMessage, WebSocketTransport};
+pub use negotiate::{
+    NegotiateOptions, NegotiateResponse, NegotiateResult, negotiate, negotiate_with_client,
+};
+pub use transport::{
+    TransferFormat, TransportMessage, TransportSendQueue, WebSocketConnectOptions,
+    WebSocketTransport,
+};

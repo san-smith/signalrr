@@ -29,10 +29,16 @@ Implemented:
 - pending invocation cancellation on disconnect and server `CloseMessage` handling
 - multiple client handlers per hub method (`on` / `on_async`, `off` / `off_handler`)
 - client-to-server streaming hub method arguments (`HubArgument::Stream`)
+- transport send queue for ordered WebSocket writes
+- injectable HTTP client for negotiate (`with_http_client`)
+- optional message content logging (`with_log_message_content`)
+- mutable `set_base_url` while disconnected
+- handshake `initial_messages` / `remaining_handshake_data` exposed on `HubConnection`
+- start/stop race handling when `close()` is called during `start()`
 
 Planned next:
 
-- HttpConnection infrastructure (transport send queue, injectable HTTP client, logging)
+- FFI/WASM bindings (deferred)
 
 ## Example
 

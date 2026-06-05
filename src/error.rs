@@ -34,6 +34,9 @@ pub enum Error {
     #[error("invocation error: {0}")]
     Invocation(String),
 
+    #[error("connection aborted: {0}")]
+    Aborted(String),
+
     #[error("invalid connection state: {0}")]
     InvalidState(String),
 

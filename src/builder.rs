@@ -43,6 +43,8 @@ impl HubConnectionBuilder {
                 keep_alive_interval: DEFAULT_KEEP_ALIVE_INTERVAL,
                 reconnect_policy: None,
                 stateful_reconnect_buffer_size: DEFAULT_STATEFUL_RECONNECT_BUFFER_SIZE,
+                http_client: None,
+                log_message_content: false,
             },
             handshake_timeout: Duration::from_secs(15),
         }
@@ -138,6 +140,16 @@ impl HubConnectionBuilder {
 
     pub fn with_keep_alive_interval(mut self, interval: Duration) -> Self {
         self.config.keep_alive_interval = interval;
+        self
+    }
+
+    pub fn with_http_client(mut self, client: reqwest::Client) -> Self {
+        self.config.http_client = Some(client);
+        self
+    }
+
+    pub fn with_log_message_content(mut self, enabled: bool) -> Self {
+        self.config.log_message_content = enabled;
         self
     }
 

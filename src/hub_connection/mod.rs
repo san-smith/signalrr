@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
-use tokio::sync::{RwLock, mpsc, watch};
+use tokio::sync::{Mutex, Notify, RwLock, mpsc, watch};
 use tracing::{info, warn};
 
 pub use callbacks::{CloseCallback, ReconnectedCallback, ReconnectingCallback};
@@ -58,6 +58,10 @@ pub struct HubConnection {
     stop_reconnect: watch::Sender<bool>,
     supervisor: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
     lifecycle: Arc<LifecycleCallbacks>,
+    connect_operation: Arc<Mutex<()>>,
+    close_notify: Arc<Notify>,
+    remaining_handshake_data: Arc<RwLock<Option<RemainingData>>>,
+    initial_messages: Arc<RwLock<Vec<HubMessage>>>,
 }
 
 impl HubConnection {
@@ -76,6 +80,10 @@ impl HubConnection {
             stop_reconnect,
             supervisor: Arc::new(RwLock::new(None)),
             lifecycle: Arc::new(LifecycleCallbacks::default()),
+            connect_operation: Arc::new(Mutex::new(())),
+            close_notify: Arc::new(Notify::new()),
+            remaining_handshake_data: Arc::new(RwLock::new(None)),
+            initial_messages: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
@@ -112,6 +120,20 @@ impl HubConnection {
         &self.options.base_url
     }
 
+    /// Updates the hub endpoint URL.
+    ///
+    /// The URL can only be changed while the connection is disconnected.
+    pub async fn set_base_url(&mut self, url: impl Into<String>) -> Result<(), Error> {
+        if *self.state.read().await != HubConnectionState::Disconnected {
+            return Err(Error::InvalidState(
+                "base URL can only be changed while the connection is disconnected".into(),
+            ));
+        }
+
+        self.options.base_url = url.into();
+        Ok(())
+    }
+
     /// Current connection state.
     pub async fn state(&self) -> HubConnectionState {
         *self.state.read().await
@@ -123,20 +145,13 @@ impl HubConnection {
     }
 
     /// Remaining transport data received together with the handshake response.
-    ///
-    /// Available only immediately after [`Self::start`] before any further reads.
-    pub fn remaining_handshake_data(&self) -> Option<&RemainingData> {
-        None
+    pub async fn remaining_handshake_data(&self) -> Option<RemainingData> {
+        self.remaining_handshake_data.read().await.clone()
     }
 
     /// Hub messages parsed from data received together with the handshake response.
     pub async fn initial_messages(&self) -> Vec<HubMessage> {
-        self.runtime
-            .read()
-            .await
-            .as_ref()
-            .map(|_| Vec::new())
-            .unwrap_or_default()
+        self.initial_messages.read().await.clone()
     }
 
     /// Negotiates, opens the WebSocket transport, and completes the handshake.
@@ -163,8 +178,24 @@ impl HubConnection {
             )));
         }
 
+        let _connect_guard = self.connect_operation.lock().await;
+
+        if self.closing.load(Ordering::Relaxed) {
+            *self.state.write().await = HubConnectionState::Disconnected;
+            return Err(Error::Aborted(
+                "connection stopped during start".into(),
+            ));
+        }
+
         match self.connect_runtime(false).await {
             Ok(events_rx) => {
+                if self.closing.load(Ordering::Relaxed) {
+                    self.shutdown_active_connection(None).await?;
+                    return Err(Error::Aborted(
+                        "connection stopped during start".into(),
+                    ));
+                }
+
                 *self.state.write().await = HubConnectionState::Connected;
                 self.lifecycle.mark_started();
                 self.spawn_supervisor(events_rx).await;
@@ -173,6 +204,8 @@ impl HubConnection {
             Err(error) => {
                 *self.runtime.write().await = None;
                 *self.connection_id.write().await = None;
+                *self.remaining_handshake_data.write().await = None;
+                *self.initial_messages.write().await = Vec::new();
                 *self.state.write().await = HubConnectionState::Disconnected;
                 Err(error)
             }
@@ -187,6 +220,7 @@ impl HubConnection {
         }
 
         if current_state == HubConnectionState::Disconnecting {
+            self.close_notify.notified().await;
             return Ok(());
         }
 
@@ -194,6 +228,11 @@ impl HubConnection {
         self.closing.store(true, Ordering::Relaxed);
         let _ = self.stop_reconnect.send(true);
 
+        let _connect_guard = self.connect_operation.lock().await;
+        self.shutdown_active_connection(None).await
+    }
+
+    async fn shutdown_active_connection(&self, close_reason: Option<&str>) -> Result<(), Error> {
         if let Some(task) = self.supervisor.write().await.take() {
             task.abort();
         }
@@ -211,10 +250,12 @@ impl HubConnection {
         }
 
         *self.message_buffer.write().await = None;
-
         *self.connection_id.write().await = None;
+        *self.remaining_handshake_data.write().await = None;
+        *self.initial_messages.write().await = Vec::new();
         *self.state.write().await = HubConnectionState::Disconnected;
-        self.lifecycle.invoke_closed(None).await;
+        self.lifecycle.invoke_closed(close_reason).await;
+        self.close_notify.notify_waiters();
         Ok(())
     }
 
@@ -446,6 +487,10 @@ impl HubConnection {
     ) -> Result<mpsc::UnboundedReceiver<TransportEvent>, Error> {
         let mut connection = Connection::connect(self.options.clone()).await?;
         *self.connection_id.write().await = connection.connection_id().map(str::to_string);
+        *self.remaining_handshake_data.write().await = connection
+            .remaining_handshake_data()
+            .cloned();
+        *self.initial_messages.write().await = connection.initial_messages().to_vec();
 
         let transport = connection.transport();
         let incoming = connection.take_incoming();
@@ -681,6 +726,8 @@ pub struct HubConnectionConfig {
     pub keep_alive_interval: Duration,
     pub reconnect_policy: Option<Arc<dyn RetryPolicy>>,
     pub stateful_reconnect_buffer_size: usize,
+    pub http_client: Option<reqwest::Client>,
+    pub log_message_content: bool,
 }
 
 impl HubConnectionConfig {
@@ -698,6 +745,8 @@ impl HubConnectionConfig {
             keep_alive_interval: self.keep_alive_interval,
             reconnect_policy: self.reconnect_policy,
             stateful_reconnect_buffer_size: self.stateful_reconnect_buffer_size,
+            http_client: self.http_client,
+            log_message_content: self.log_message_content,
         }
     }
 }
@@ -980,6 +1029,20 @@ mod tests {
 
         let text = outgoing.lock().await.pop().unwrap();
         assert!(text.contains("async"));
+    }
+
+    #[tokio::test]
+    async fn set_base_url_requires_disconnected_state() {
+        let mut connection =
+            HubConnection::new(ConnectionOptions::new("https://example.com/signalr"));
+        *connection.state.write().await = HubConnectionState::Connected;
+
+        let error = connection
+            .set_base_url("https://other.example/signalr")
+            .await
+            .expect_err("set_base_url should fail when connected");
+
+        assert!(matches!(error, Error::InvalidState(_)));
     }
 
     #[test]
