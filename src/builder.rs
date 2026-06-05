@@ -7,6 +7,8 @@ use crate::access_token::{AccessTokenFactory, factory as access_token_factory};
 use crate::handshake::HandshakeRequest;
 use crate::hub::protocol::HubProtocol;
 use crate::hub::{JsonProtocol, MessagePackProtocol};
+#[cfg(feature = "messagepack-brotli")]
+use crate::hub::MessagePackBrotliProtocol;
 use crate::hub_connection::runtime::{DEFAULT_KEEP_ALIVE_INTERVAL, DEFAULT_SERVER_TIMEOUT};
 use crate::hub_connection::{HubConnection, HubConnectionConfig};
 use crate::negotiate::NegotiateOptions;
@@ -78,6 +80,11 @@ impl HubConnectionBuilder {
 
     pub fn with_messagepack_protocol(self) -> Self {
         self.with_hub_protocol(Arc::new(MessagePackProtocol))
+    }
+
+    #[cfg(feature = "messagepack-brotli")]
+    pub fn with_messagepack_brotli_protocol(self) -> Self {
+        self.with_hub_protocol(Arc::new(MessagePackBrotliProtocol::default()))
     }
 
     pub fn with_transfer_format(mut self, transfer_format: TransferFormat) -> Self {

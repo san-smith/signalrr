@@ -3,6 +3,9 @@
 mod parse;
 mod write;
 
+#[cfg(feature = "messagepack-brotli")]
+pub mod brotli;
+
 use rmpv::Value;
 
 use crate::framing::BinaryMessageFormat;

@@ -141,7 +141,7 @@ pub fn write_sequence(message: SequenceMessage) -> Result<Vec<u8>, ProtocolError
     ])
 }
 
-fn pack_payload(payload: &[Value]) -> Result<Vec<u8>, ProtocolError> {
+pub(crate) fn pack_payload(payload: &[Value]) -> Result<Vec<u8>, ProtocolError> {
     let packed = encode_array(payload)?;
     Ok(BinaryMessageFormat::write(&packed))
 }
@@ -154,7 +154,7 @@ fn encode_array(values: &[Value]) -> Result<Vec<u8>, ProtocolError> {
     Ok(buffer)
 }
 
-fn headers_value(headers: &HashMap<String, String>) -> Value {
+pub(crate) fn headers_value(headers: &HashMap<String, String>) -> Value {
     if headers.is_empty() {
         Value::Map(vec![])
     } else {
@@ -172,17 +172,17 @@ fn headers_value(headers: &HashMap<String, String>) -> Value {
     }
 }
 
-fn optional_string_value(value: Option<&str>) -> Value {
+pub(crate) fn optional_string_value(value: Option<&str>) -> Value {
     value
         .map(|value| Value::String(value.to_string().into()))
         .unwrap_or(Value::Nil)
 }
 
-fn json_array_value(values: &[serde_json::Value]) -> Value {
+pub(crate) fn json_array_value(values: &[serde_json::Value]) -> Value {
     Value::Array(values.iter().map(|value| json_to_value(Some(value.clone()))).collect())
 }
 
-fn json_to_value(value: Option<serde_json::Value>) -> Value {
+pub(crate) fn json_to_value(value: Option<serde_json::Value>) -> Value {
     match value {
         None | Some(serde_json::Value::Null) => Value::Nil,
         Some(serde_json::Value::Bool(value)) => Value::Boolean(value),

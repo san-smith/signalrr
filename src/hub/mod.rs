@@ -12,4 +12,6 @@ pub use message::{
     StreamItemMessage,
 };
 pub use messagepack::MessagePackProtocol;
+#[cfg(feature = "messagepack-brotli")]
+pub use messagepack::brotli::{BrotliDecoder, DefaultBrotliDecoder, MessagePackBrotliProtocol};
 pub use protocol::{HubProtocol, HubProtocolInput, ProtocolError};

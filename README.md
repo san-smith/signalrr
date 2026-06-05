@@ -20,10 +20,10 @@ Implemented:
 - builder helpers: `with_json_protocol()`, `with_messagepack_protocol()`
 - `invoke` / `send` / `on` hub methods
 - server timeout (30s) and keepalive ping (15s)
+- custom `messagepack+brotli` hub protocol (feature `messagepack-brotli`)
 
 Planned next:
 
-- custom `messagepack+brotli` protocol
 - streaming hub invocations
 - automatic and stateful reconnect
 
@@ -61,6 +61,7 @@ async fn main() -> Result<(), signalrr::Error> {
 
 ```bash
 cargo test
+cargo test --features messagepack-brotli
 cargo fmt
 cargo clippy
 ```

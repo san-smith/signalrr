@@ -7,7 +7,7 @@
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), signalrr::Error> {
-//!     let mut connection = HubConnection::builder("https://example.com/signalr")
+//!     let connection = HubConnection::builder("https://example.com/signalr")
 //!         .with_access_token(|| async { Ok(String::new()) })
 //!         .build();
 //!
@@ -45,6 +45,8 @@ pub use hub::{
     HubProtocolInput, InvocationMessage, JsonProtocol, MessagePackProtocol, MessageType,
     PingMessage, ProtocolError, SequenceMessage, StreamInvocationMessage, StreamItemMessage,
 };
+#[cfg(feature = "messagepack-brotli")]
+pub use hub::{BrotliDecoder, DefaultBrotliDecoder, MessagePackBrotliProtocol};
 pub use hub_connection::{
     DEFAULT_KEEP_ALIVE_INTERVAL, DEFAULT_SERVER_TIMEOUT, HubConnection, HubConnectionState,
 };

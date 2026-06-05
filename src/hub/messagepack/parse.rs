@@ -38,7 +38,7 @@ pub fn parse_message(data: &[Value]) -> Result<Option<HubMessage>, ProtocolError
     Ok(Some(message))
 }
 
-fn create_message_headers(data: &[Value]) -> Result<HashMap<String, String>, ProtocolError> {
+pub(crate) fn create_message_headers(data: &[Value]) -> Result<HashMap<String, String>, ProtocolError> {
     if data.len() < 2 {
         return Err(ProtocolError::InvalidPayload("invalid headers".into()));
     }
@@ -58,7 +58,7 @@ fn create_message_headers(data: &[Value]) -> Result<HashMap<String, String>, Pro
     }
 }
 
-fn create_close_message(data: &[Value]) -> Result<CloseMessage, ProtocolError> {
+pub(crate) fn create_close_message(data: &[Value]) -> Result<CloseMessage, ProtocolError> {
     if data.len() < 2 {
         return Err(ProtocolError::InvalidPayload(
             "invalid payload for Close message".into(),
@@ -71,7 +71,7 @@ fn create_close_message(data: &[Value]) -> Result<CloseMessage, ProtocolError> {
     })
 }
 
-fn create_ping_message(data: &[Value]) -> Result<PingMessage, ProtocolError> {
+pub(crate) fn create_ping_message(data: &[Value]) -> Result<PingMessage, ProtocolError> {
     if data.is_empty() {
         return Err(ProtocolError::InvalidPayload(
             "invalid payload for Ping message".into(),
@@ -153,7 +153,7 @@ fn create_invocation_message(data: &[Value]) -> Result<InvocationMessage, Protoc
     })
 }
 
-fn create_ack_message(data: &[Value]) -> Result<AckMessage, ProtocolError> {
+pub(crate) fn create_ack_message(data: &[Value]) -> Result<AckMessage, ProtocolError> {
     if data.len() < 2 {
         return Err(ProtocolError::InvalidPayload(
             "invalid payload for Ack message".into(),
@@ -165,7 +165,7 @@ fn create_ack_message(data: &[Value]) -> Result<AckMessage, ProtocolError> {
     })
 }
 
-fn create_sequence_message(data: &[Value]) -> Result<SequenceMessage, ProtocolError> {
+pub(crate) fn create_sequence_message(data: &[Value]) -> Result<SequenceMessage, ProtocolError> {
     if data.len() < 2 {
         return Err(ProtocolError::InvalidPayload(
             "invalid payload for Sequence message".into(),
@@ -177,31 +177,31 @@ fn create_sequence_message(data: &[Value]) -> Result<SequenceMessage, ProtocolEr
     })
 }
 
-fn value_to_i64(value: &Value) -> Result<i64, ProtocolError> {
+pub(crate) fn value_to_i64(value: &Value) -> Result<i64, ProtocolError> {
     value
         .as_i64()
         .ok_or_else(|| ProtocolError::InvalidPayload("expected integer".into()))
 }
 
-fn value_to_string(value: &Value) -> Result<String, ProtocolError> {
+pub(crate) fn value_to_string(value: &Value) -> Result<String, ProtocolError> {
     value
         .as_str()
         .map(str::to_string)
         .ok_or_else(|| ProtocolError::InvalidPayload("expected string".into()))
 }
 
-fn optional_string(value: &Value) -> Result<Option<String>, ProtocolError> {
+pub(crate) fn optional_string(value: &Value) -> Result<Option<String>, ProtocolError> {
     match value {
         Value::Nil => Ok(None),
         _ => value_to_string(value).map(Some),
     }
 }
 
-fn value_to_json(value: &Value) -> serde_json::Value {
+pub(crate) fn value_to_json(value: &Value) -> serde_json::Value {
     serde_json::to_value(value).unwrap_or(serde_json::Value::Null)
 }
 
-fn value_to_json_array(value: &Value) -> Result<Vec<serde_json::Value>, ProtocolError> {
+pub(crate) fn value_to_json_array(value: &Value) -> Result<Vec<serde_json::Value>, ProtocolError> {
     value
         .as_array()
         .map(|array| array.iter().map(value_to_json).collect())
