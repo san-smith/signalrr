@@ -70,9 +70,9 @@ impl DispatchContext {
 
     async fn handle_invocation(&self, message: InvocationMessage) -> Result<(), Error> {
         let target = message.target.to_ascii_lowercase();
-        let handler = self.bus.handler_for(&target).await;
+        let handlers = self.bus.handlers_for(&target).await;
 
-        let Some(handler) = handler else {
+        if handlers.is_empty() {
             if let Some(invocation_id) = message.invocation_id {
                 warn!(method = %message.target, "no client handler registered for server invocation");
                 self.send_completion(CompletionMessage {
@@ -84,26 +84,72 @@ impl DispatchContext {
                 .await?;
             }
             return Ok(());
-        };
+        }
 
-        let response = handler(message.arguments);
+        let expects_response = message.invocation_id.is_some();
+        let mut result = None;
+        let mut handler_error = None;
+        let mut multiple_results = false;
+
+        for handler in handlers {
+            match handler(message.arguments.clone()).await_output().await {
+                Ok(Some(value)) => {
+                    if expects_response && result.is_some() {
+                        warn!(
+                            method = %message.target,
+                            "multiple client handlers returned a result for a server invocation"
+                        );
+                        multiple_results = true;
+                        handler_error = None;
+                    } else {
+                        result = Some(value);
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    if !multiple_results {
+                        handler_error = Some(error);
+                    }
+                }
+            }
+        }
+
         if let Some(invocation_id) = message.invocation_id {
-            let completion = match response {
-                Some(result) => CompletionMessage {
+            let completion = if multiple_results {
+                CompletionMessage {
+                    headers: Default::default(),
+                    invocation_id,
+                    error: Some("Client provided multiple results.".into()),
+                    result: None,
+                }
+            } else if let Some(error) = handler_error {
+                CompletionMessage {
+                    headers: Default::default(),
+                    invocation_id,
+                    error: Some(error),
+                    result: None,
+                }
+            } else if let Some(value) = result {
+                CompletionMessage {
                     headers: Default::default(),
                     invocation_id,
                     error: None,
-                    result: Some(result),
-                },
-                None => CompletionMessage {
+                    result: Some(value),
+                }
+            } else {
+                warn!(
+                    method = %message.target,
+                    "no client handler returned a result for a server invocation that expected one"
+                );
+                CompletionMessage {
                     headers: Default::default(),
                     invocation_id,
                     error: Some("Client didn't provide a result.".into()),
                     result: None,
-                },
+                }
             };
             self.send_completion(completion).await?;
-        } else if response.is_some() {
+        } else if result.is_some() {
             warn!(
                 method = %message.target,
                 "client handler returned a result for a server invocation that did not expect one"

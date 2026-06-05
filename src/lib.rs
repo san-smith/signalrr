@@ -33,7 +33,10 @@ pub mod hub_connection;
 
 pub use access_token::{AccessTokenFactory, factory as access_token_factory};
 pub use builder::HubConnectionBuilder;
-pub use bus::{ClientMethodHandler, INVOCATION_CANCELED_MESSAGE, MessageBus};
+pub use bus::{
+    ClientHandlerId, ClientMethodHandler, ClientMethodOutput, INVOCATION_CANCELED_MESSAGE,
+    MessageBus,
+};
 pub use error::{Error, FramingError};
 pub use framing::{BinaryMessageFormat, RECORD_SEPARATOR, TextMessageFormat};
 pub use handshake::{

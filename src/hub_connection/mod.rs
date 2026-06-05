@@ -29,7 +29,7 @@ pub use state::HubConnectionState;
 pub use stream::HubMethodStream;
 
 use crate::access_token::AccessTokenFactory;
-use crate::bus::{MessageBus, INVOCATION_CANCELED_MESSAGE};
+use crate::bus::{ClientHandlerId, ClientMethodOutput, MessageBus, INVOCATION_CANCELED_MESSAGE};
 use crate::connection::{Connection, ConnectionOptions};
 use crate::error::Error;
 use crate::handshake::{HandshakeRequest, RemainingData};
@@ -215,19 +215,58 @@ impl HubConnection {
         Ok(())
     }
 
-    /// Registers a handler for server-to-client hub method invocations.
-    pub async fn on<F>(&self, method_name: impl Into<String>, handler: F)
+    /// Registers a synchronous handler for server-to-client hub method invocations.
+    ///
+    /// Returns a [`ClientHandlerId`] that can be passed to [`Self::off_handler`].
+    pub async fn on<F>(&self, method_name: impl Into<String>, handler: F) -> ClientHandlerId
     where
         F: Fn(Vec<Value>) -> Option<Value> + Send + Sync + 'static,
     {
         self.bus
-            .register_handler(method_name.into(), Arc::new(handler))
-            .await;
+            .register_handler(
+                method_name.into(),
+                Arc::new(move |args| ClientMethodOutput::ready(Ok(handler(args)))),
+            )
+            .await
+    }
+
+    /// Registers an asynchronous handler for server-to-client hub method invocations.
+    ///
+    /// The handler may return [`Ok(None)`] when no result should be sent to the server,
+    /// or [`Err`] when the invocation should complete with an error.
+    pub async fn on_async<F, Fut>(
+        &self,
+        method_name: impl Into<String>,
+        handler: F,
+    ) -> ClientHandlerId
+    where
+        F: Fn(Vec<Value>) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<Option<Value>, String>> + Send + 'static,
+    {
+        self.bus
+            .register_handler(
+                method_name.into(),
+                Arc::new(move |args| ClientMethodOutput::r#async(handler(args))),
+            )
+            .await
     }
 
     /// Removes all handlers registered for the given hub method name.
     pub async fn off(&self, method_name: impl AsRef<str>) {
-        self.bus.remove_handler(method_name.as_ref()).await;
+        self.bus
+            .remove_handler(method_name.as_ref(), None)
+            .await;
+    }
+
+    /// Removes a single handler previously registered with [`Self::on`] or [`Self::on_async`].
+    pub async fn off_handler(
+        &self,
+        method_name: impl AsRef<str>,
+        handler_id: ClientHandlerId,
+    ) {
+        self.bus
+            .remove_handler(method_name.as_ref(), Some(handler_id))
+            .await;
     }
 
     /// Invokes a hub method on the server and awaits the completion result.
@@ -733,6 +772,8 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_invokes_registered_client_handler() {
+        use crate::bus::ClientMethodOutput;
+
         let bus = crate::bus::MessageBus::default();
         let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let called_clone = called.clone();
@@ -741,7 +782,7 @@ mod tests {
             "Echo".into(),
             Arc::new(move |arguments| {
                 called_clone.store(true, Ordering::Relaxed);
-                Some(arguments.first()?.clone())
+                ClientMethodOutput::ready(Ok(arguments.first().cloned()))
             }),
         )
         .await;
@@ -759,6 +800,134 @@ mod tests {
         .unwrap();
 
         assert!(called.load(Ordering::Relaxed));
+    }
+
+    #[tokio::test]
+    async fn dispatch_invokes_all_registered_client_handlers() {
+        use crate::bus::ClientMethodOutput;
+
+        let bus = crate::bus::MessageBus::default();
+        let first = Arc::new(AtomicBool::new(false));
+        let second = Arc::new(AtomicBool::new(false));
+
+        bus.register_handler(
+            "Notify".into(),
+            Arc::new({
+                let first = first.clone();
+                move |_| {
+                    first.store(true, Ordering::Relaxed);
+                    ClientMethodOutput::ready(Ok(None))
+                }
+            }),
+        )
+        .await;
+        bus.register_handler(
+            "Notify".into(),
+            Arc::new({
+                let second = second.clone();
+                move |_| {
+                    second.store(true, Ordering::Relaxed);
+                    ClientMethodOutput::ready(Ok(None))
+                }
+            }),
+        )
+        .await;
+
+        let ctx = test_dispatch_context(bus);
+        ctx.dispatch(HubMessage::Invocation(InvocationMessage {
+            headers: Default::default(),
+            invocation_id: None,
+            target: "Notify".into(),
+            arguments: vec![],
+            stream_ids: None,
+        }))
+        .await
+        .unwrap();
+
+        assert!(first.load(Ordering::Relaxed));
+        assert!(second.load(Ordering::Relaxed));
+    }
+
+    #[tokio::test]
+    async fn dispatch_multiple_handler_results_send_error_completion() {
+        use crate::bus::ClientMethodOutput;
+
+        let bus = crate::bus::MessageBus::default();
+        bus.register_handler(
+            "Echo".into(),
+            Arc::new(|_| ClientMethodOutput::ready(Ok(Some(Value::String("one".into()))))),
+        )
+        .await;
+        bus.register_handler(
+            "Echo".into(),
+            Arc::new(|_| ClientMethodOutput::ready(Ok(Some(Value::String("two".into()))))),
+        )
+        .await;
+
+        let (transport, outgoing) = WebSocketTransport::recording();
+        let ctx = DispatchContext {
+            bus,
+            transport,
+            protocol: Arc::new(JsonProtocol),
+            transfer_format: TransferFormat::Text,
+            message_buffer: None,
+            transport_events: mpsc::unbounded_channel().0,
+            transport_close_signaled: Arc::new(AtomicBool::new(false)),
+        };
+
+        ctx.dispatch(HubMessage::Invocation(InvocationMessage {
+            headers: Default::default(),
+            invocation_id: Some("1".into()),
+            target: "Echo".into(),
+            arguments: vec![],
+            stream_ids: None,
+        }))
+        .await
+        .unwrap();
+
+        let text = outgoing.lock().await.pop().unwrap();
+        assert!(text.contains("Client provided multiple results."));
+    }
+
+    #[tokio::test]
+    async fn dispatch_async_handler_can_complete_with_result() {
+        use crate::bus::ClientMethodOutput;
+
+        let bus = crate::bus::MessageBus::default();
+        bus.register_handler(
+            "Echo".into(),
+            Arc::new(|_| {
+                ClientMethodOutput::r#async(async {
+                    tokio::task::yield_now().await;
+                    Ok(Some(Value::String("async".into())))
+                })
+            }),
+        )
+        .await;
+
+        let (transport, outgoing) = WebSocketTransport::recording();
+        let ctx = DispatchContext {
+            bus,
+            transport,
+            protocol: Arc::new(JsonProtocol),
+            transfer_format: TransferFormat::Text,
+            message_buffer: None,
+            transport_events: mpsc::unbounded_channel().0,
+            transport_close_signaled: Arc::new(AtomicBool::new(false)),
+        };
+
+        ctx.dispatch(HubMessage::Invocation(InvocationMessage {
+            headers: Default::default(),
+            invocation_id: Some("1".into()),
+            target: "Echo".into(),
+            arguments: vec![],
+            stream_ids: None,
+        }))
+        .await
+        .unwrap();
+
+        let text = outgoing.lock().await.pop().unwrap();
+        assert!(text.contains("async"));
     }
 
     #[test]

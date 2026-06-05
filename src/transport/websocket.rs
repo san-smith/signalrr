@@ -23,11 +23,20 @@ pub enum TransportMessage {
 
 #[derive(Clone)]
 struct WebSocketTransportInner {
-    sender: Arc<
-        Mutex<futures_util::stream::SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>,
+    sender: Option<
+        Arc<
+            Mutex<
+                futures_util::stream::SplitSink<
+                    WebSocketStream<MaybeTlsStream<TcpStream>>,
+                    Message,
+                >,
+            >,
+        >,
     >,
     read_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     closed: Arc<Mutex<bool>>,
+    #[cfg(test)]
+    test_outgoing: Option<Arc<Mutex<Vec<String>>>>,
 }
 
 /// WebSocket transport handle.
@@ -66,9 +75,11 @@ impl WebSocketTransport {
         Ok((
             Self {
                 inner: Some(WebSocketTransportInner {
-                    sender,
+                    sender: Some(sender),
                     read_task: Arc::new(Mutex::new(Some(read_task))),
                     closed: Arc::new(Mutex::new(false)),
+                    #[cfg(test)]
+                    test_outgoing: None,
                 }),
             },
             incoming_rx,
@@ -81,8 +92,17 @@ impl WebSocketTransport {
             return Ok(());
         };
 
-        inner
-            .sender
+        #[cfg(test)]
+        if let Some(outgoing) = &inner.test_outgoing {
+            outgoing.lock().await.push(payload.into());
+            return Ok(());
+        }
+
+        let Some(sender) = &inner.sender else {
+            return Ok(());
+        };
+
+        sender
             .lock()
             .await
             .send(Message::Text(payload.into()))
@@ -96,8 +116,11 @@ impl WebSocketTransport {
             return Ok(());
         };
 
-        inner
-            .sender
+        let Some(sender) = &inner.sender else {
+            return Ok(());
+        };
+
+        sender
             .lock()
             .await
             .send(Message::Binary(payload))
@@ -117,13 +140,14 @@ impl WebSocketTransport {
         }
         *closed = true;
 
-        inner
-            .sender
-            .lock()
-            .await
-            .close()
-            .await
-            .map_err(|error| Error::WebSocket(Box::new(error)))?;
+        if let Some(sender) = &inner.sender {
+            sender
+                .lock()
+                .await
+                .close()
+                .await
+                .map_err(|error| Error::WebSocket(Box::new(error)))?;
+        }
 
         if let Some(task) = inner.read_task.lock().await.take() {
             task.abort();
@@ -135,6 +159,22 @@ impl WebSocketTransport {
     #[cfg(test)]
     pub(crate) fn disconnected() -> Self {
         Self { inner: None }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn recording() -> (Self, Arc<Mutex<Vec<String>>>) {
+        let outgoing = Arc::new(Mutex::new(Vec::new()));
+        (
+            Self {
+                inner: Some(WebSocketTransportInner {
+                    sender: None,
+                    read_task: Arc::new(Mutex::new(None)),
+                    closed: Arc::new(Mutex::new(false)),
+                    test_outgoing: Some(outgoing.clone()),
+                }),
+            },
+            outgoing,
+        )
     }
 }
 
