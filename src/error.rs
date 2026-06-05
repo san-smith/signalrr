@@ -3,52 +3,59 @@ use thiserror::Error;
 
 /// Errors that can occur in the SignalR client.
 #[derive(Error, Debug)]
-pub enum SignalRError {
+pub enum Error {
     #[error("URL parse error: {0}")]
     UrlParse(#[from] url::ParseError),
 
-    #[error("HTTP error: {0}")]
-    Http(#[from] http::Error),
-
     #[error("HTTP request failed: {0}")]
-    Reqwest(#[from] reqwest::Error),
+    Http(#[from] reqwest::Error),
 
     #[error("WebSocket error: {0}")]
     WebSocket(#[from] tokio_tungstenite::tungstenite::Error),
 
-    #[error("Protocol error: {0}")]
-    Protocol(#[from] crate::protocol::SignalRProtocolError),
+    #[error("negotiate failed: {0}")]
+    Negotiate(String),
 
-    #[error("Handshake failed: {0}")]
-    HandshakeFailed(String),
+    #[error("handshake failed: {0}")]
+    Handshake(String),
 
-    #[error("Not connected")]
-    NotConnected,
-
-    #[error("Invocation canceled")]
-    Canceled,
-
-    #[error("Invocation error: {0}")]
-    InvocationError(String),
+    #[error("framing error: {0}")]
+    Framing(#[from] FramingError),
 
     #[error("JSON error: {0}")]
-    JsonError(#[from] serde_json::Error),
+    Json(#[from] serde_json::Error),
 
-    #[error("MessagePack serialization error: {0}")]
-    MessagePackEncode(#[from] rmp_serde::encode::Error),
+    #[error("not connected")]
+    NotConnected,
 
-    #[error("MessagePack deserialization error: {0}")]
-    MessagePackDecode(#[from] rmp_serde::decode::Error),
+    #[error("invocation canceled")]
+    Canceled,
+
+    #[error("invocation error: {0}")]
+    Invocation(String),
 }
 
-impl From<Canceled> for SignalRError {
+/// Errors during text/binary message framing.
+#[derive(Error, Debug, PartialEq, Eq)]
+pub enum FramingError {
+    #[error("message is incomplete")]
+    IncompleteMessage,
+
+    #[error("cannot read message size")]
+    CannotReadSize,
+
+    #[error("messages bigger than 2GB are not supported")]
+    MessageTooLarge,
+}
+
+impl From<Canceled> for Error {
     fn from(_: Canceled) -> Self {
-        SignalRError::Canceled
+        Error::Canceled
     }
 }
 
-impl From<String> for SignalRError {
-    fn from(s: String) -> Self {
-        SignalRError::InvocationError(s)
+impl From<String> for Error {
+    fn from(message: String) -> Self {
+        Error::Invocation(message)
     }
 }

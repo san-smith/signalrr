@@ -1,50 +1,49 @@
 # signalrr
 
-[![crates.io](https://img.shields.io/crates/v/signalrr.svg)](https://crates.io/crates/signalrr)
 [![docs.rs](https://img.shields.io/docsrs/signalrr)](https://docs.rs/signalrr)
 
-Rust client for **ASP.NET Core SignalR** with first-class support for:
-
-- ✅ MessagePack protocol
-- ✅ Server-to-client streaming
-- ✅ Event subscriptions (`on`)
-- ✅ Optional Brotli/Gzip compression
-- ✅ Compilation to WebAssembly (WASM)
+Rust client for **ASP.NET Core SignalR** with support for MessagePack and custom hub protocols.
 
 ## Status
 
-> 🚧 **Work in progress** — not yet published on crates.io.
+> Work in progress — API is not stable.
 
-This library is under active development. The API is **not stable**.
+Current scope (v0 foundation):
 
-## Features
+- text/binary message framing
+- JSON handshake
+- HTTP negotiate with `connectionToken`
+- `HubConnection` builder skeleton
+- internal `MessageBus` for invoke/stream dispatch
 
-- `compression` — enable Brotli/Gzip payload compression (requires compatible server)
-- `tracing` — structured logging (WASM support via `tracing-wasm`)
+Planned next:
 
-## Basic usage
+- WebSocket transport + `HubConnection` lifecycle
+- MessagePack hub protocol v2
+- custom `messagepack+brotli` protocol
+- automatic and stateful reconnect
+
+## Example
 
 ```rust
-use signalrr::SignalRClient;
+use signalrr::HubConnection;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut client = SignalRClient::builder("http://localhost:5000/chathub")
-        .build()
-        .await?;
+fn main() {
+    let connection = HubConnection::builder("https://example.com/signalr")
+        .with_stateful_reconnect(true)
+        .build();
 
-    client.start().await?;
-    println!("Connected!");
-
-    Ok(())
+    assert_eq!(connection.state(), signalrr::HubConnectionState::Disconnected);
 }
 ```
 
-## Compatibility
+## Development
 
-- ✅ ASP.NET Core SignalR (with AddMessagePackProtocol())
-- ❌ Classic SignalR (.NET Framework)
-- ⚠️ Compression only works with custom or extended SignalR servers
+```bash
+cargo test
+cargo fmt
+cargo clippy
+```
 
 ## License
 

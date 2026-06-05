@@ -1,27 +1,36 @@
 //! Rust client for ASP.NET Core SignalR.
 //!
-//! This crate provides a low-level implementation of the SignalR hub protocol,
-//! with support for MessagePack serialization, streaming, and WebAssembly.
-//!
 //! # Quick start
 //!
 //! ```no_run
-//! use signalrr::SignalRClient;
+//! use signalrr::HubConnection;
 //!
 //! #[tokio::main]
-//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let mut client = SignalRClient::new("http://localhost:5000/chathub");
-//!     client.start().await?;
-//!     println!("Connected!");
-//!     Ok(())
+//! async fn main() {
+//!     let connection = HubConnection::builder("https://example.com/signalr")
+//!         .build();
+//!     assert_eq!(connection.url(), "https://example.com/signalr");
 //! }
 //! ```
 
-mod connection;
+mod bus;
 mod error;
+mod framing;
+mod handshake;
 mod negotiate;
-mod transport;
 
-pub mod protocol;
-pub use connection::SignalRClient;
-pub use protocol::{Frame, MessagePackCodec, SignalRProtocolError};
+pub mod builder;
+pub mod hub_connection;
+
+pub use builder::HubConnectionBuilder;
+pub use error::{Error, FramingError};
+pub use framing::{BinaryMessageFormat, TextMessageFormat, RECORD_SEPARATOR};
+pub use handshake::{
+    HandshakeInput, HandshakeProtocol, HandshakeRequest, HandshakeResponse, HandshakeResult,
+    RemainingData,
+};
+pub use hub_connection::{HubConnection, HubConnectionState};
+pub use negotiate::{NegotiateOptions, NegotiateResponse, negotiate};
+
+#[doc(hidden)]
+pub use bus::MessageBus;
