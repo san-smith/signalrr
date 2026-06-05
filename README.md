@@ -8,19 +8,19 @@ Rust client for **ASP.NET Core SignalR** with support for MessagePack and custom
 
 > Work in progress — API is not stable.
 
-Current scope (v0 foundation):
+Implemented:
 
 - text/binary message framing
 - JSON handshake
-- HTTP negotiate with `connectionToken`
-- `HubConnection` builder skeleton
-- internal `MessageBus` for invoke/stream dispatch
+- HTTP negotiate with redirects and `connectionToken`
+- WebSocket transport
+- `HubConnection::start()` / `close()` lifecycle
 
 Planned next:
 
-- WebSocket transport + `HubConnection` lifecycle
 - MessagePack hub protocol v2
 - custom `messagepack+brotli` protocol
+- `invoke` / `send` / `on`
 - automatic and stateful reconnect
 
 ## Example
@@ -28,12 +28,19 @@ Planned next:
 ```rust
 use signalrr::HubConnection;
 
-fn main() {
-    let connection = HubConnection::builder("https://example.com/signalr")
-        .with_stateful_reconnect(true)
+#[tokio::main]
+async fn main() -> Result<(), signalrr::Error> {
+    let mut connection = HubConnection::builder("https://example.com/signalr?platform=pwa")
+        .with_access_token(|| async {
+            Ok(std::env::var("ACCESS_TOKEN").unwrap_or_default())
+        })
+        .with_header("X-Tenant-Id", "brand.region")
         .build();
 
-    assert_eq!(connection.state(), signalrr::HubConnectionState::Disconnected);
+    connection.start().await?;
+    println!("Connected: {:?}", connection.connection_id());
+    connection.close().await?;
+    Ok(())
 }
 ```
 

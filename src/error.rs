@@ -11,7 +11,7 @@ pub enum Error {
     Http(#[from] reqwest::Error),
 
     #[error("WebSocket error: {0}")]
-    WebSocket(#[from] tokio_tungstenite::tungstenite::Error),
+    WebSocket(#[from] Box<tokio_tungstenite::tungstenite::Error>),
 
     #[error("negotiate failed: {0}")]
     Negotiate(String),
@@ -33,6 +33,9 @@ pub enum Error {
 
     #[error("invocation error: {0}")]
     Invocation(String),
+
+    #[error("invalid connection state: {0}")]
+    InvalidState(String),
 }
 
 /// Errors during text/binary message framing.

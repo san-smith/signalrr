@@ -6,22 +6,31 @@
 //! use signalrr::HubConnection;
 //!
 //! #[tokio::main]
-//! async fn main() {
-//!     let connection = HubConnection::builder("https://example.com/signalr")
+//! async fn main() -> Result<(), signalrr::Error> {
+//!     let mut connection = HubConnection::builder("https://example.com/signalr")
+//!         .with_access_token(|| async { Ok(String::new()) })
 //!         .build();
-//!     assert_eq!(connection.url(), "https://example.com/signalr");
+//!
+//!     connection.start().await?;
+//!     println!("Connected: {:?}", connection.connection_id());
+//!     connection.close().await?;
+//!     Ok(())
 //! }
 //! ```
 
+mod access_token;
 mod bus;
+mod connection;
 mod error;
 mod framing;
 mod handshake;
 mod negotiate;
+mod transport;
 
 pub mod builder;
 pub mod hub_connection;
 
+pub use access_token::{AccessTokenFactory, factory as access_token_factory};
 pub use builder::HubConnectionBuilder;
 pub use error::{Error, FramingError};
 pub use framing::{BinaryMessageFormat, TextMessageFormat, RECORD_SEPARATOR};
@@ -30,7 +39,8 @@ pub use handshake::{
     RemainingData,
 };
 pub use hub_connection::{HubConnection, HubConnectionState};
-pub use negotiate::{NegotiateOptions, NegotiateResponse, negotiate};
+pub use negotiate::{NegotiateOptions, NegotiateResponse, NegotiateResult, negotiate};
+pub use transport::{TransferFormat, TransportMessage, WebSocketTransport};
 
 #[doc(hidden)]
 pub use bus::MessageBus;

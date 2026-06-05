@@ -1,11 +1,14 @@
 //! HTTP negotiate step before opening the WebSocket transport.
 
+use std::time::Duration;
+
 use crate::error::Error;
 use reqwest::Client;
 use serde::Deserialize;
 use url::Url;
 
 const DEFAULT_NEGOTIATE_VERSION: u32 = 1;
+const MAX_NEGOTIATE_REDIRECTS: u32 = 100;
 
 /// Response from the SignalR `/negotiate` endpoint.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -32,32 +35,115 @@ impl NegotiateResponse {
             .or(self.connection_id.as_deref())
             .ok_or_else(|| Error::Negotiate("missing connectionToken and connectionId".into()))
     }
+
+    fn normalize(mut self) -> Self {
+        if self.negotiate_version.unwrap_or(0) < 1 {
+            self.connection_token = self
+                .connection_token
+                .or_else(|| self.connection_id.clone());
+        }
+        self
+    }
+}
+
+/// Result of a completed negotiate sequence (including redirects).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NegotiateResult {
+    pub response: NegotiateResponse,
+    pub access_token: Option<String>,
 }
 
 /// Options for the negotiate request.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct NegotiateOptions {
     pub negotiate_version: u32,
     pub use_stateful_reconnect: bool,
     pub headers: Vec<(String, String)>,
+    pub timeout: Duration,
 }
 
-impl NegotiateOptions {
-    pub fn new() -> Self {
+impl Default for NegotiateOptions {
+    fn default() -> Self {
         Self {
             negotiate_version: DEFAULT_NEGOTIATE_VERSION,
-            ..Self::default()
+            use_stateful_reconnect: false,
+            headers: Vec::new(),
+            timeout: Duration::from_secs(100),
         }
     }
 }
 
-/// Performs the negotiate request and returns the parsed response.
+impl NegotiateOptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+/// Performs negotiate, following server redirects until a final response is received.
 pub async fn negotiate(
     hub_url: &str,
     options: &NegotiateOptions,
+    access_token: Option<&str>,
+) -> Result<NegotiateResult, Error> {
+    let client = Client::builder().timeout(options.timeout).build()?;
+    negotiate_with_client(hub_url, options, &client, access_token).await
+}
+
+/// Performs negotiate using a caller-provided HTTP client.
+pub async fn negotiate_with_client(
+    hub_url: &str,
+    options: &NegotiateOptions,
+    client: &Client,
+    mut access_token: Option<&str>,
+) -> Result<NegotiateResult, Error> {
+    let mut current_url = hub_url.to_string();
+    let mut redirects = 0;
+    let mut stored_access_token = access_token.take().map(str::to_owned);
+
+    loop {
+        let response =
+            negotiate_once(&current_url, options, client, stored_access_token.as_deref()).await?;
+
+        if let Some(error) = &response.error {
+            return Err(Error::Negotiate(error.clone()));
+        }
+
+        if (response.use_stateful_reconnect.unwrap_or(false)) && !options.use_stateful_reconnect {
+            return Err(Error::Negotiate(
+                "client did not negotiate stateful reconnect but the server did".into(),
+            ));
+        }
+
+        if let Some(token) = &response.access_token {
+            stored_access_token = Some(token.clone());
+        }
+
+        let redirect_url = response.url.clone();
+        let is_final = redirect_url.is_none() || redirects >= MAX_NEGOTIATE_REDIRECTS;
+
+        if is_final {
+            if redirects >= MAX_NEGOTIATE_REDIRECTS && redirect_url.is_some() {
+                return Err(Error::Negotiate("negotiate redirection limit exceeded".into()));
+            }
+
+            return Ok(NegotiateResult {
+                response,
+                access_token: stored_access_token,
+            });
+        }
+
+        current_url = redirect_url.unwrap();
+        redirects += 1;
+    }
+}
+
+async fn negotiate_once(
+    hub_url: &str,
+    options: &NegotiateOptions,
+    client: &Client,
+    access_token: Option<&str>,
 ) -> Result<NegotiateResponse, Error> {
     let negotiate_url = resolve_negotiate_url(hub_url, options)?;
-    let client = Client::new();
     let mut request = client
         .post(negotiate_url)
         .header("Accept", "application/json");
@@ -66,28 +152,50 @@ pub async fn negotiate(
         request = request.header(name, value);
     }
 
+    if let Some(token) = access_token.filter(|token| !token.is_empty()) {
+        request = request.header("Authorization", format!("Bearer {token}"));
+    }
+
     let response = request.send().await?;
-    if !response.status().is_success() {
+    if response.status() != reqwest::StatusCode::OK {
         return Err(Error::Negotiate(format!(
-            "unexpected status code: {}",
+            "unexpected status code returned from negotiate: {}",
             response.status()
         )));
     }
 
-    let mut negotiate_response: NegotiateResponse = response.json().await?;
-    if negotiate_response.negotiate_version.unwrap_or(0) < 1 {
-        negotiate_response.connection_token = negotiate_response
-            .connection_token
-            .or(negotiate_response.connection_id.clone());
+    Ok(response.json::<NegotiateResponse>().await?.normalize())
+}
+
+/// Builds the WebSocket URL used after negotiate completes.
+pub fn build_websocket_url(
+    base_url: &str,
+    connection_token: &str,
+    access_token: Option<&str>,
+) -> Result<String, Error> {
+    let mut parsed = Url::parse(base_url)?;
+    parsed.set_fragment(None);
+
+    let mut query_pairs: Vec<(String, String)> = parsed
+        .query_pairs()
+        .filter(|(key, _)| key != "negotiateVersion")
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    query_pairs.push(("id".into(), connection_token.to_string()));
+
+    parsed.set_query(None);
+    {
+        let mut query = parsed.query_pairs_mut();
+        for (key, value) in query_pairs {
+            query.append_pair(&key, &value);
+        }
     }
 
-    if negotiate_response.error.is_some() {
-        return Err(Error::Negotiate(
-            negotiate_response.error.clone().unwrap_or_default(),
-        ));
-    }
+    let mut url = parsed.to_string();
+    url = url.replacen("https://", "wss://", 1);
+    url = url.replacen("http://", "ws://", 1);
 
-    Ok(negotiate_response)
+    crate::transport::append_access_token(&url, access_token)
 }
 
 fn resolve_negotiate_url(hub_url: &str, options: &NegotiateOptions) -> Result<String, Error> {
@@ -143,6 +251,22 @@ mod tests {
     }
 
     #[test]
+    fn build_websocket_url_sets_id_and_scheme() {
+        let url = build_websocket_url(
+            "https://example.com/signalr?platform=pwa",
+            "connection-token",
+            Some("jwt"),
+        )
+        .unwrap();
+
+        assert!(url.starts_with("wss://example.com/signalr?"));
+        assert!(url.contains("platform=pwa"));
+        assert!(url.contains("id=connection-token"));
+        assert!(url.contains("access_token=jwt"));
+        assert!(!url.contains("negotiateVersion"));
+    }
+
+    #[test]
     fn websocket_token_prefers_connection_token() {
         let response = NegotiateResponse {
             url: None,
@@ -167,7 +291,8 @@ mod tests {
             connection_token: None,
             negotiate_version: Some(0),
             use_stateful_reconnect: None,
-        };
+        }
+        .normalize();
 
         assert_eq!(response.websocket_token().unwrap(), "id");
     }
