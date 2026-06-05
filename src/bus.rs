@@ -101,6 +101,10 @@ impl MessageBus {
             let _ = tx.unbounded_send(item);
         }
     }
+
+    pub async fn remove_pending(&self, id: &str) {
+        self.pending.write().await.remove(id);
+    }
 }
 
 impl Default for MessageBus {

@@ -5,6 +5,7 @@ pub(crate) mod message_buffer;
 pub(crate) mod retry;
 pub(crate) mod runtime;
 mod state;
+mod stream;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,13 +23,14 @@ pub use runtime::{
     DEFAULT_KEEP_ALIVE_INTERVAL, DEFAULT_SERVER_TIMEOUT, HubRuntimeOptions, TransportEvent,
 };
 pub use state::HubConnectionState;
+pub use stream::HubMethodStream;
 
 use crate::access_token::AccessTokenFactory;
 use crate::bus::MessageBus;
 use crate::connection::{Connection, ConnectionOptions};
 use crate::error::Error;
 use crate::handshake::{HandshakeRequest, RemainingData};
-use crate::hub::message::{HubMessage, InvocationMessage};
+use crate::hub::message::{CancelInvocationMessage, HubMessage, InvocationMessage, StreamInvocationMessage};
 use crate::hub::protocol::HubProtocol;
 use crate::hub_connection::runtime::HubRuntime;
 use crate::negotiate::NegotiateOptions;
@@ -222,6 +224,64 @@ impl HubConnection {
             Ok(value) => Ok(value),
             Err(error) => Err(Error::Invocation(error)),
         }
+    }
+
+    /// Invokes a streaming hub method and returns items until the server completes the stream.
+    pub async fn stream(
+        &self,
+        method_name: impl AsRef<str>,
+        arguments: Vec<Value>,
+    ) -> Result<HubMethodStream, Error> {
+        self.require_connected().await?;
+
+        let invocation_id = {
+            let runtime = self.runtime.read().await;
+            runtime
+                .as_ref()
+                .ok_or(Error::NotConnected)?
+                .next_invocation_id()
+        };
+
+        let items = self.bus.register_stream(invocation_id.clone()).await?;
+        let stream = HubMethodStream::new(
+            invocation_id.clone(),
+            items,
+            self.runtime.clone(),
+            self.bus.clone(),
+        );
+
+        {
+            let runtime = self.runtime.read().await;
+            runtime
+                .as_ref()
+                .ok_or(Error::NotConnected)?
+                .send(&HubMessage::StreamInvocation(StreamInvocationMessage {
+                    headers: Default::default(),
+                    invocation_id,
+                    target: method_name.as_ref().to_string(),
+                    arguments,
+                    stream_ids: None,
+                }))
+                .await?;
+        }
+
+        Ok(stream)
+    }
+
+    /// Cancels an active streaming hub invocation by id.
+    pub async fn cancel_stream(&self, invocation_id: impl AsRef<str>) -> Result<(), Error> {
+        self.require_connected().await?;
+        self.bus.remove_pending(invocation_id.as_ref()).await;
+
+        let runtime = self.runtime.read().await;
+        runtime
+            .as_ref()
+            .ok_or(Error::NotConnected)?
+            .send(&HubMessage::CancelInvocation(CancelInvocationMessage {
+                    headers: Default::default(),
+                    invocation_id: invocation_id.as_ref().to_string(),
+            }))
+            .await
     }
 
     /// Sends a hub method invocation without waiting for a completion message.
@@ -465,7 +525,7 @@ mod tests {
     use super::*;
     use crate::connection::ConnectionOptions;
     use crate::error::Error;
-    use crate::hub::message::{CompletionMessage, PingMessage};
+    use crate::hub::message::{CompletionMessage, PingMessage, StreamItemMessage};
     use crate::hub::protocol::HubProtocolInput;
     use crate::hub::{JsonProtocol, MessagePackProtocol};
     use crate::hub_connection::dispatch::DispatchContext;
@@ -503,6 +563,59 @@ mod tests {
             .expect_err("invoke should fail when disconnected");
 
         assert!(matches!(error, Error::NotConnected));
+    }
+
+    #[tokio::test]
+    async fn stream_requires_connected_state() {
+        let connection = HubConnection::new(ConnectionOptions::new("https://example.com/signalr"));
+        let error = connection.stream("Method", Vec::new()).await;
+        assert!(matches!(error, Err(Error::NotConnected)));
+    }
+
+    #[tokio::test]
+    async fn dispatch_routes_stream_items_until_completion() {
+        use futures_util::StreamExt;
+        use tokio::sync::RwLock;
+
+        let bus = crate::bus::MessageBus::default();
+        let id = "stream-42".to_string();
+        let items = bus.register_stream(id.clone()).await.unwrap();
+        let mut stream = HubMethodStream::new(
+            id.clone(),
+            items,
+            Arc::new(RwLock::new(None)),
+            bus.clone(),
+        );
+
+        let ctx = DispatchContext {
+            bus: bus.clone(),
+            transport: WebSocketTransport::disconnected(),
+            protocol: Arc::new(JsonProtocol),
+            transfer_format: TransferFormat::Text,
+            message_buffer: None,
+        };
+
+        ctx.dispatch(HubMessage::StreamItem(StreamItemMessage {
+            headers: Default::default(),
+            invocation_id: Some(id.clone()),
+            item: Value::String("chunk".into()),
+        }))
+        .await
+        .unwrap();
+
+        let _ = ctx.dispatch(HubMessage::Completion(CompletionMessage {
+            headers: Default::default(),
+            invocation_id: id,
+            error: None,
+            result: None,
+        }))
+        .await;
+
+        assert_eq!(
+            stream.next().await.unwrap().unwrap(),
+            Value::String("chunk".into())
+        );
+        assert!(stream.next().await.is_none());
     }
 
     #[tokio::test]

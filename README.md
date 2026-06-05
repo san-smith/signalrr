@@ -23,14 +23,17 @@ Implemented:
 - custom `messagepack+brotli` hub protocol (feature `messagepack-brotli`)
 - automatic reconnect with configurable [`RetryPolicy`](https://docs.rs/signalrr/latest/signalrr/trait.RetryPolicy.html)
 - stateful reconnect with message buffering (`with_stateful_reconnect()`)
+- streaming hub invocations (`stream()` / `StreamInvocation`)
 
 Planned next:
 
-- streaming hub invocations
+- client-to-server streaming arguments in `invoke` / `send`
+- FFI / WASM for Flutter and Jaspr
 
 ## Example
 
 ```rust
+use futures_util::StreamExt;
 use signalrr::HubConnection;
 
 #[tokio::main]
@@ -53,6 +56,11 @@ async fn main() -> Result<(), signalrr::Error> {
             None
         })
         .await;
+
+    let mut stream = connection.stream("WatchCounter", vec![]).await?;
+    while let Some(item) = stream.next().await {
+        println!("Stream item: {:?}", item?);
+    }
 
     connection.close().await?;
     Ok(())
