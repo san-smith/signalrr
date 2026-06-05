@@ -24,6 +24,7 @@ mod connection;
 mod error;
 mod framing;
 mod handshake;
+mod hub;
 mod negotiate;
 mod transport;
 
@@ -37,6 +38,12 @@ pub use framing::{BinaryMessageFormat, TextMessageFormat, RECORD_SEPARATOR};
 pub use handshake::{
     HandshakeInput, HandshakeProtocol, HandshakeRequest, HandshakeResponse, HandshakeResult,
     RemainingData,
+};
+pub use hub::{
+    AckMessage, CancelInvocationMessage, CloseMessage, CompletionMessage, HubMessage,
+    HubProtocol, HubProtocolInput, InvocationMessage, JsonProtocol, MessagePackProtocol,
+    MessageType, PingMessage, ProtocolError, SequenceMessage, StreamInvocationMessage,
+    StreamItemMessage,
 };
 pub use hub_connection::{HubConnection, HubConnectionState};
 pub use negotiate::{NegotiateOptions, NegotiateResponse, NegotiateResult, negotiate};

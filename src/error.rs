@@ -36,6 +36,9 @@ pub enum Error {
 
     #[error("invalid connection state: {0}")]
     InvalidState(String),
+
+    #[error("protocol error: {0}")]
+    Protocol(String),
 }
 
 /// Errors during text/binary message framing.

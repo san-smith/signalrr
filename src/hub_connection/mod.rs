@@ -13,6 +13,7 @@ use crate::access_token::AccessTokenFactory;
 use crate::connection::{Connection, ConnectionOptions};
 use crate::error::Error;
 use crate::handshake::{HandshakeRequest, RemainingData};
+use crate::hub::protocol::HubProtocol;
 use crate::negotiate::NegotiateOptions;
 use crate::transport::TransferFormat;
 
@@ -52,6 +53,14 @@ impl HubConnection {
         self.connection
             .as_ref()
             .and_then(|connection| connection.remaining_handshake_data())
+    }
+
+    /// Hub messages parsed from data received together with the handshake response.
+    pub fn initial_messages(&self) -> &[crate::hub::message::HubMessage] {
+        self.connection
+            .as_ref()
+            .map(|connection| connection.initial_messages())
+            .unwrap_or(&[])
     }
 
     /// Negotiates, opens the WebSocket transport, and completes the handshake.
@@ -111,6 +120,7 @@ pub struct HubConnectionConfig {
     pub transfer_format: TransferFormat,
     pub access_token_factory: Option<AccessTokenFactory>,
     pub handshake_timeout: Duration,
+    pub hub_protocol: Arc<dyn HubProtocol>,
 }
 
 impl HubConnectionConfig {
@@ -122,6 +132,7 @@ impl HubConnectionConfig {
             transfer_format: self.transfer_format,
             handshake_timeout: self.handshake_timeout,
             access_token_factory: self.access_token_factory,
+            hub_protocol: self.hub_protocol,
         }
     }
 }

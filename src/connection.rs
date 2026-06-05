@@ -1,5 +1,6 @@
 //! Internal SignalR connection: negotiate, WebSocket, and handshake.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::mpsc;
@@ -9,6 +10,8 @@ use tracing::{debug, info};
 use crate::access_token::AccessTokenFactory;
 use crate::error::Error;
 use crate::handshake::{HandshakeInput, HandshakeProtocol, HandshakeRequest, HandshakeResult, RemainingData};
+use crate::hub::message::HubMessage;
+use crate::hub::protocol::{HubProtocol, HubProtocolInput};
 use crate::negotiate::{NegotiateOptions, NegotiateResult, build_websocket_url, negotiate};
 use crate::transport::{TransferFormat, WebSocketTransport, TransportMessage};
 
@@ -23,6 +26,7 @@ pub struct ConnectionOptions {
     pub transfer_format: TransferFormat,
     pub handshake_timeout: Duration,
     pub access_token_factory: Option<AccessTokenFactory>,
+    pub hub_protocol: Arc<dyn HubProtocol>,
 }
 
 impl ConnectionOptions {
@@ -37,6 +41,7 @@ impl ConnectionOptions {
             transfer_format: TransferFormat::Binary,
             handshake_timeout: DEFAULT_HANDSHAKE_TIMEOUT,
             access_token_factory: None,
+            hub_protocol: Arc::new(crate::hub::MessagePackProtocol),
         }
     }
 }
@@ -49,6 +54,7 @@ pub struct Connection {
     connection_token: String,
     transport: WebSocketTransport,
     handshake_result: HandshakeResult,
+    initial_messages: Vec<HubMessage>,
     incoming: mpsc::UnboundedReceiver<TransportMessage>,
 }
 
@@ -93,6 +99,8 @@ impl Connection {
             return Err(Error::Handshake(error.clone()));
         }
 
+        let initial_messages = parse_initial_messages(&options.hub_protocol, &handshake_result)?;
+
         info!(
             connection_id = connection_id.as_deref().unwrap_or("unknown"),
             protocol = %options.handshake_request.protocol,
@@ -105,6 +113,7 @@ impl Connection {
             connection_token,
             transport,
             handshake_result,
+            initial_messages,
             incoming,
         })
     }
@@ -115,6 +124,10 @@ impl Connection {
 
     pub fn remaining_handshake_data(&self) -> Option<&RemainingData> {
         self.handshake_result.remaining.as_ref()
+    }
+
+    pub fn initial_messages(&self) -> &[HubMessage] {
+        &self.initial_messages
     }
 
     pub async fn close(self) -> Result<(), Error> {
@@ -139,6 +152,22 @@ impl Connection {
     pub fn incoming(&mut self) -> &mut mpsc::UnboundedReceiver<TransportMessage> {
         &mut self.incoming
     }
+}
+
+fn parse_initial_messages(
+    protocol: &Arc<dyn HubProtocol>,
+    handshake_result: &HandshakeResult,
+) -> Result<Vec<HubMessage>, Error> {
+    let Some(remaining) = &handshake_result.remaining else {
+        return Ok(Vec::new());
+    };
+
+    let input = match remaining {
+        RemainingData::Text(text) => HubProtocolInput::Text(text),
+        RemainingData::Bytes(bytes) => HubProtocolInput::Binary(bytes),
+    };
+
+    protocol.parse_messages(input).map_err(Error::from)
 }
 
 async fn resolve_access_token(

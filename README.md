@@ -15,12 +15,14 @@ Implemented:
 - HTTP negotiate with redirects and `connectionToken`
 - WebSocket transport
 - `HubConnection::start()` / `close()` lifecycle
+- hub message model (`HubMessage`, invocation/completion/ping/…)
+- JSON and MessagePack v2 hub protocols (`HubProtocol`)
+- builder helpers: `with_json_protocol()`, `with_messagepack_protocol()`
 
 Planned next:
 
-- MessagePack hub protocol v2
 - custom `messagepack+brotli` protocol
-- `invoke` / `send` / `on`
+- `invoke` / `send` / `on` wired through `MessageBus`
 - automatic and stateful reconnect
 
 ## Example
@@ -31,6 +33,7 @@ use signalrr::HubConnection;
 #[tokio::main]
 async fn main() -> Result<(), signalrr::Error> {
     let mut connection = HubConnection::builder("https://example.com/signalr?platform=pwa")
+        .with_messagepack_protocol()
         .with_access_token(|| async {
             Ok(std::env::var("ACCESS_TOKEN").unwrap_or_default())
         })

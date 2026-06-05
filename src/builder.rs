@@ -1,9 +1,12 @@
 //! Builder for [`HubConnection`](crate::HubConnection).
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::access_token::{AccessTokenFactory, factory as access_token_factory};
 use crate::handshake::HandshakeRequest;
+use crate::hub::protocol::HubProtocol;
+use crate::hub::{JsonProtocol, MessagePackProtocol};
 use crate::hub_connection::{HubConnection, HubConnectionConfig};
 use crate::negotiate::NegotiateOptions;
 use crate::transport::TransferFormat;
@@ -28,6 +31,7 @@ impl HubConnectionBuilder {
                 transfer_format: TransferFormat::Binary,
                 access_token_factory: None,
                 handshake_timeout: Duration::from_secs(15),
+                hub_protocol: Arc::new(MessagePackProtocol),
             },
             handshake_timeout: Duration::from_secs(15),
         }
@@ -57,6 +61,24 @@ impl HubConnectionBuilder {
         self.config.handshake_request.protocol = protocol.into();
         self.config.handshake_request.version = version;
         self
+    }
+
+    pub fn with_hub_protocol(mut self, protocol: Arc<dyn HubProtocol>) -> Self {
+        self.config.handshake_request = HandshakeRequest {
+            protocol: protocol.name().to_string(),
+            version: protocol.version(),
+        };
+        self.config.transfer_format = protocol.transfer_format();
+        self.config.hub_protocol = protocol;
+        self
+    }
+
+    pub fn with_json_protocol(self) -> Self {
+        self.with_hub_protocol(Arc::new(JsonProtocol))
+    }
+
+    pub fn with_messagepack_protocol(self) -> Self {
+        self.with_hub_protocol(Arc::new(MessagePackProtocol))
     }
 
     pub fn with_transfer_format(mut self, transfer_format: TransferFormat) -> Self {
