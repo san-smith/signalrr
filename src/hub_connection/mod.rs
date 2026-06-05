@@ -7,6 +7,7 @@ pub(crate) mod retry;
 pub(crate) mod runtime;
 mod state;
 mod stream;
+mod upload_stream;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -27,6 +28,7 @@ pub use runtime::{
 };
 pub use state::HubConnectionState;
 pub use stream::HubMethodStream;
+pub use upload_stream::{ClientUploadStream, HubArgument};
 
 use crate::access_token::AccessTokenFactory;
 use crate::bus::{ClientHandlerId, ClientMethodOutput, MessageBus, INVOCATION_CANCELED_MESSAGE};
@@ -39,6 +41,7 @@ use crate::hub::message::{
 use crate::hub::protocol::HubProtocol;
 use crate::hub_connection::callbacks::LifecycleCallbacks;
 use crate::hub_connection::runtime::HubRuntime;
+use crate::hub_connection::upload_stream::{launch_upload_streams, replace_streaming_params};
 use crate::negotiate::NegotiateOptions;
 use crate::transport::TransferFormat;
 
@@ -270,16 +273,25 @@ impl HubConnection {
     }
 
     /// Invokes a hub method on the server and awaits the completion result.
+    ///
+    /// Arguments may include [`ClientUploadStream`] values via [`HubArgument::Stream`].
     pub async fn invoke(
         &self,
         method_name: impl AsRef<str>,
-        arguments: Vec<Value>,
+        arguments: Vec<HubArgument>,
     ) -> Result<Value, Error> {
         self.require_connected().await?;
 
+        let runtime = self.runtime.clone();
+        let (arguments, stream_ids, streams) = {
+            let active_runtime = runtime.read().await;
+            let active_runtime = active_runtime.as_ref().ok_or(Error::NotConnected)?;
+            replace_streaming_params(arguments, || active_runtime.next_invocation_id())
+        };
+
         let invocation_id = {
-            let runtime = self.runtime.read().await;
-            runtime
+            let active_runtime = runtime.read().await;
+            active_runtime
                 .as_ref()
                 .ok_or(Error::NotConnected)?
                 .next_invocation_id()
@@ -287,20 +299,26 @@ impl HubConnection {
 
         let response = self.bus.register_pending(invocation_id.clone()).await?;
 
-        {
-            let runtime = self.runtime.read().await;
-            runtime
-                .as_ref()
-                .ok_or(Error::NotConnected)?
-                .send(&HubMessage::Invocation(InvocationMessage {
-                    headers: Default::default(),
-                    invocation_id: Some(invocation_id),
-                    target: method_name.as_ref().to_string(),
-                    arguments,
-                    stream_ids: None,
-                }))
-                .await?;
-        }
+        let message = HubMessage::Invocation(InvocationMessage {
+            headers: Default::default(),
+            invocation_id: Some(invocation_id),
+            target: method_name.as_ref().to_string(),
+            arguments,
+            stream_ids,
+        });
+
+        launch_upload_streams(
+            runtime.clone(),
+            streams,
+            async move {
+                let active_runtime = runtime.read().await;
+                active_runtime
+                    .as_ref()
+                    .ok_or(Error::NotConnected)?
+                    .send(&message)
+                    .await
+            },
+        );
 
         match response.await? {
             Ok(value) => Ok(value),
@@ -309,16 +327,25 @@ impl HubConnection {
     }
 
     /// Invokes a streaming hub method and returns items until the server completes the stream.
+    ///
+    /// Arguments may include [`ClientUploadStream`] values via [`HubArgument::Stream`].
     pub async fn stream(
         &self,
         method_name: impl AsRef<str>,
-        arguments: Vec<Value>,
+        arguments: Vec<HubArgument>,
     ) -> Result<HubMethodStream, Error> {
         self.require_connected().await?;
 
+        let runtime = self.runtime.clone();
+        let (arguments, stream_ids, streams) = {
+            let active_runtime = runtime.read().await;
+            let active_runtime = active_runtime.as_ref().ok_or(Error::NotConnected)?;
+            replace_streaming_params(arguments, || active_runtime.next_invocation_id())
+        };
+
         let invocation_id = {
-            let runtime = self.runtime.read().await;
-            runtime
+            let active_runtime = runtime.read().await;
+            active_runtime
                 .as_ref()
                 .ok_or(Error::NotConnected)?
                 .next_invocation_id()
@@ -332,20 +359,26 @@ impl HubConnection {
             self.bus.clone(),
         );
 
-        {
-            let runtime = self.runtime.read().await;
-            runtime
-                .as_ref()
-                .ok_or(Error::NotConnected)?
-                .send(&HubMessage::StreamInvocation(StreamInvocationMessage {
-                    headers: Default::default(),
-                    invocation_id,
-                    target: method_name.as_ref().to_string(),
-                    arguments,
-                    stream_ids: None,
-                }))
-                .await?;
-        }
+        let message = HubMessage::StreamInvocation(StreamInvocationMessage {
+            headers: Default::default(),
+            invocation_id,
+            target: method_name.as_ref().to_string(),
+            arguments,
+            stream_ids,
+        });
+
+        launch_upload_streams(
+            runtime.clone(),
+            streams,
+            async move {
+                let active_runtime = runtime.read().await;
+                active_runtime
+                    .as_ref()
+                    .ok_or(Error::NotConnected)?
+                    .send(&message)
+                    .await
+            },
+        );
 
         Ok(stream)
     }
@@ -367,25 +400,44 @@ impl HubConnection {
     }
 
     /// Sends a hub method invocation without waiting for a completion message.
+    ///
+    /// Arguments may include [`ClientUploadStream`] values via [`HubArgument::Stream`].
     pub async fn send(
         &self,
         method_name: impl AsRef<str>,
-        arguments: Vec<Value>,
+        arguments: Vec<HubArgument>,
     ) -> Result<(), Error> {
         self.require_connected().await?;
 
-        let runtime = self.runtime.read().await;
-        runtime
-            .as_ref()
-            .ok_or(Error::NotConnected)?
-            .send(&HubMessage::Invocation(InvocationMessage {
-                headers: Default::default(),
-                invocation_id: None,
-                target: method_name.as_ref().to_string(),
-                arguments,
-                stream_ids: None,
-            }))
-            .await
+        let runtime = self.runtime.clone();
+        let (arguments, stream_ids, streams) = {
+            let active_runtime = runtime.read().await;
+            let active_runtime = active_runtime.as_ref().ok_or(Error::NotConnected)?;
+            replace_streaming_params(arguments, || active_runtime.next_invocation_id())
+        };
+
+        let message = HubMessage::Invocation(InvocationMessage {
+            headers: Default::default(),
+            invocation_id: None,
+            target: method_name.as_ref().to_string(),
+            arguments,
+            stream_ids,
+        });
+
+        launch_upload_streams(
+            runtime.clone(),
+            streams,
+            async move {
+                let active_runtime = runtime.read().await;
+                active_runtime
+                    .as_ref()
+                    .ok_or(Error::NotConnected)?
+                    .send(&message)
+                    .await
+            },
+        );
+
+        Ok(())
     }
 
     async fn connect_runtime(

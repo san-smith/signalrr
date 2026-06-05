@@ -51,8 +51,8 @@ pub use hub::{
 #[cfg(feature = "messagepack-brotli")]
 pub use hub::{BrotliDecoder, DefaultBrotliDecoder, MessagePackBrotliProtocol};
 pub use hub_connection::{
-    CloseCallback, DEFAULT_KEEP_ALIVE_INTERVAL, DEFAULT_SERVER_TIMEOUT,
-    DEFAULT_STATEFUL_RECONNECT_BUFFER_SIZE, DefaultReconnectPolicy, HubConnection,
+    ClientUploadStream, CloseCallback, DEFAULT_KEEP_ALIVE_INTERVAL, DEFAULT_SERVER_TIMEOUT,
+    DEFAULT_STATEFUL_RECONNECT_BUFFER_SIZE, DefaultReconnectPolicy, HubArgument, HubConnection,
     HubConnectionState, HubMethodStream, ReconnectedCallback, ReconnectingCallback, RetryContext,
     RetryPolicy, TransportCloseInfo,
 };

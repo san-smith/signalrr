@@ -28,16 +28,17 @@ Implemented:
 - lifecycle callbacks: `on_close`, `on_reconnecting`, `on_reconnected`
 - pending invocation cancellation on disconnect and server `CloseMessage` handling
 - multiple client handlers per hub method (`on` / `on_async`, `off` / `off_handler`)
+- client-to-server streaming hub method arguments (`HubArgument::Stream`)
 
 Planned next:
 
-- client-to-server streaming parameters in invoke/send/stream arguments
+- HttpConnection infrastructure (transport send queue, injectable HTTP client, logging)
 
 ## Example
 
 ```rust
 use futures_util::StreamExt;
-use signalrr::HubConnection;
+use signalrr::{ClientUploadStream, HubArgument, HubConnection};
 
 #[tokio::main]
 async fn main() -> Result<(), signalrr::Error> {
@@ -59,6 +60,17 @@ async fn main() -> Result<(), signalrr::Error> {
             None
         })
         .await;
+
+    let upload = ClientUploadStream::from_iter([serde_json::json!("chunk")]);
+    connection
+        .send(
+            "Upload",
+            vec![
+                HubArgument::Value(serde_json::json!("metadata")),
+                HubArgument::Stream(upload),
+            ],
+        )
+        .await?;
 
     let mut stream = connection.stream("WatchCounter", vec![]).await?;
     while let Some(item) = stream.next().await {
