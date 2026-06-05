@@ -14,6 +14,8 @@ use crate::handshake::{
 };
 use crate::hub::message::HubMessage;
 use crate::hub::protocol::{HubProtocol, HubProtocolInput};
+use crate::hub_connection::DEFAULT_STATEFUL_RECONNECT_BUFFER_SIZE;
+use crate::hub_connection::retry::RetryPolicy;
 use crate::hub_connection::runtime::{DEFAULT_KEEP_ALIVE_INTERVAL, DEFAULT_SERVER_TIMEOUT};
 use crate::negotiate::{NegotiateOptions, NegotiateResult, build_websocket_url, negotiate};
 use crate::transport::{TransferFormat, TransportMessage, WebSocketTransport};
@@ -32,6 +34,8 @@ pub struct ConnectionOptions {
     pub hub_protocol: Arc<dyn HubProtocol>,
     pub server_timeout: Duration,
     pub keep_alive_interval: Duration,
+    pub reconnect_policy: Option<Arc<dyn RetryPolicy>>,
+    pub stateful_reconnect_buffer_size: usize,
 }
 
 impl ConnectionOptions {
@@ -49,6 +53,8 @@ impl ConnectionOptions {
             hub_protocol: Arc::new(crate::hub::MessagePackProtocol),
             server_timeout: DEFAULT_SERVER_TIMEOUT,
             keep_alive_interval: DEFAULT_KEEP_ALIVE_INTERVAL,
+            reconnect_policy: None,
+            stateful_reconnect_buffer_size: DEFAULT_STATEFUL_RECONNECT_BUFFER_SIZE,
         }
     }
 }

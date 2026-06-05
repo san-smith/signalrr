@@ -10,7 +10,10 @@ use crate::hub::{JsonProtocol, MessagePackProtocol};
 #[cfg(feature = "messagepack-brotli")]
 use crate::hub::MessagePackBrotliProtocol;
 use crate::hub_connection::runtime::{DEFAULT_KEEP_ALIVE_INTERVAL, DEFAULT_SERVER_TIMEOUT};
-use crate::hub_connection::{HubConnection, HubConnectionConfig};
+use crate::hub_connection::{
+    DefaultReconnectPolicy, HubConnection, HubConnectionConfig, RetryPolicy,
+    DEFAULT_STATEFUL_RECONNECT_BUFFER_SIZE,
+};
 use crate::negotiate::NegotiateOptions;
 use crate::transport::TransferFormat;
 
@@ -37,6 +40,8 @@ impl HubConnectionBuilder {
                 hub_protocol: Arc::new(MessagePackProtocol),
                 server_timeout: DEFAULT_SERVER_TIMEOUT,
                 keep_alive_interval: DEFAULT_KEEP_ALIVE_INTERVAL,
+                reconnect_policy: None,
+                stateful_reconnect_buffer_size: DEFAULT_STATEFUL_RECONNECT_BUFFER_SIZE,
             },
             handshake_timeout: Duration::from_secs(15),
         }
@@ -47,6 +52,20 @@ impl HubConnectionBuilder {
         if enabled {
             self.config.handshake_request.version = 2;
         }
+        self
+    }
+
+    pub fn with_stateful_reconnect_buffer_size(mut self, size: usize) -> Self {
+        self.config.stateful_reconnect_buffer_size = size;
+        self
+    }
+
+    pub fn with_automatic_reconnect(self) -> Self {
+        self.with_reconnect_policy(Arc::new(DefaultReconnectPolicy::default()))
+    }
+
+    pub fn with_reconnect_policy(mut self, policy: Arc<dyn RetryPolicy>) -> Self {
+        self.config.reconnect_policy = Some(policy);
         self
     }
 

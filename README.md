@@ -21,11 +21,12 @@ Implemented:
 - `invoke` / `send` / `on` hub methods
 - server timeout (30s) and keepalive ping (15s)
 - custom `messagepack+brotli` hub protocol (feature `messagepack-brotli`)
+- automatic reconnect with configurable [`RetryPolicy`](https://docs.rs/signalrr/latest/signalrr/trait.RetryPolicy.html)
+- stateful reconnect with message buffering (`with_stateful_reconnect()`)
 
 Planned next:
 
 - streaming hub invocations
-- automatic and stateful reconnect
 
 ## Example
 
@@ -36,6 +37,7 @@ use signalrr::HubConnection;
 async fn main() -> Result<(), signalrr::Error> {
     let mut connection = HubConnection::builder("https://example.com/signalr?platform=pwa")
         .with_messagepack_protocol()
+        .with_automatic_reconnect()
         .with_access_token(|| async {
             Ok(std::env::var("ACCESS_TOKEN").unwrap_or_default())
         })

@@ -8,9 +8,11 @@ use tracing::warn;
 use crate::bus::MessageBus;
 use crate::error::Error;
 use crate::hub::message::{
-    CloseMessage, CompletionMessage, HubMessage, InvocationMessage, StreamItemMessage,
+    CloseMessage, CompletionMessage, HubMessage, InvocationMessage,
+    StreamItemMessage,
 };
 use crate::hub::protocol::HubProtocol;
+use crate::hub_connection::message_buffer::MessageBuffer;
 use crate::transport::{TransferFormat, WebSocketTransport};
 
 /// Shared context for inbound hub message processing.
@@ -19,10 +21,20 @@ pub struct DispatchContext {
     pub transport: WebSocketTransport,
     pub protocol: Arc<dyn HubProtocol>,
     pub transfer_format: TransferFormat,
+    pub message_buffer: Option<Arc<MessageBuffer>>,
 }
 
 impl DispatchContext {
     pub async fn dispatch(&self, message: HubMessage) -> Result<(), Error> {
+        if let Some(buffer) = &self.message_buffer {
+            if !buffer
+                .should_process_message(&message, &self.transport, self.transfer_format)
+                .await
+            {
+                return Ok(());
+            }
+        }
+
         match message {
             HubMessage::Invocation(message) => self.handle_invocation(message).await,
             HubMessage::StreamItem(message) => {
@@ -38,10 +50,19 @@ impl DispatchContext {
                 self.handle_close(message).await;
                 Ok(())
             }
-            HubMessage::StreamInvocation(_)
-            | HubMessage::CancelInvocation(_)
-            | HubMessage::Ack(_)
-            | HubMessage::Sequence(_) => Ok(()),
+            HubMessage::Ack(message) => {
+                if let Some(buffer) = &self.message_buffer {
+                    buffer.ack(message).await;
+                }
+                Ok(())
+            }
+            HubMessage::Sequence(message) => {
+                if let Some(buffer) = &self.message_buffer {
+                    buffer.reset_sequence(message).await?;
+                }
+                Ok(())
+            }
+            HubMessage::StreamInvocation(_) | HubMessage::CancelInvocation(_) => Ok(()),
         }
     }
 
@@ -166,6 +187,7 @@ mod tests {
             transport: WebSocketTransport::disconnected(),
             protocol: Arc::new(crate::hub::JsonProtocol),
             transfer_format: TransferFormat::Text,
+            message_buffer: None,
         };
 
         ctx.dispatch(HubMessage::Ping(PingMessage)).await.unwrap();

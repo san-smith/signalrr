@@ -48,7 +48,9 @@ pub use hub::{
 #[cfg(feature = "messagepack-brotli")]
 pub use hub::{BrotliDecoder, DefaultBrotliDecoder, MessagePackBrotliProtocol};
 pub use hub_connection::{
-    DEFAULT_KEEP_ALIVE_INTERVAL, DEFAULT_SERVER_TIMEOUT, HubConnection, HubConnectionState,
+    DefaultReconnectPolicy, RetryContext, RetryPolicy, DEFAULT_KEEP_ALIVE_INTERVAL,
+    DEFAULT_SERVER_TIMEOUT, DEFAULT_STATEFUL_RECONNECT_BUFFER_SIZE, HubConnection,
+    HubConnectionState,
 };
 pub use negotiate::{NegotiateOptions, NegotiateResponse, NegotiateResult, negotiate};
 pub use transport::{TransferFormat, TransportMessage, WebSocketTransport};

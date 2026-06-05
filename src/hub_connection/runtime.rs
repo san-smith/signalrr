@@ -2,10 +2,10 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::time::{Duration, Instant};
 
 use tokio::sync::{Notify, mpsc, watch};
 use tokio::task::JoinHandle;
+use tokio::time::{Duration, Instant};
 use tracing::{debug, warn};
 
 use crate::bus::MessageBus;
@@ -13,10 +13,17 @@ use crate::error::Error;
 use crate::hub::message::{CloseMessage, HubMessage, PingMessage};
 use crate::hub::protocol::{HubProtocol, HubProtocolInput};
 use crate::hub_connection::dispatch::{DispatchContext, send_hub_message};
+use crate::hub_connection::message_buffer::MessageBuffer;
 use crate::transport::{TransferFormat, TransportMessage, WebSocketTransport};
 
 pub const DEFAULT_SERVER_TIMEOUT: Duration = Duration::from_secs(30);
 pub const DEFAULT_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(15);
+
+/// Event emitted when the transport closes unexpectedly.
+#[derive(Debug, Clone)]
+pub enum TransportEvent {
+    Closed(Option<String>),
+}
 
 /// Active hub connection runtime: transport I/O, dispatch, and keepalive tasks.
 pub struct HubRuntime {
@@ -24,6 +31,7 @@ pub struct HubRuntime {
     pub hub_protocol: Arc<dyn HubProtocol>,
     pub transfer_format: TransferFormat,
     pub bus: MessageBus,
+    message_buffer: Option<Arc<MessageBuffer>>,
     invocation_id: AtomicI64,
     cached_ping: Vec<u8>,
     activity: Arc<Notify>,
@@ -32,17 +40,34 @@ pub struct HubRuntime {
     keepalive_task: JoinHandle<()>,
 }
 
+pub struct HubRuntimeOptions {
+    pub transport: WebSocketTransport,
+    pub incoming: mpsc::UnboundedReceiver<TransportMessage>,
+    pub hub_protocol: Arc<dyn HubProtocol>,
+    pub transfer_format: TransferFormat,
+    pub initial_messages: Vec<HubMessage>,
+    pub server_timeout: Duration,
+    pub keep_alive_interval: Duration,
+    pub bus: MessageBus,
+    pub message_buffer: Option<Arc<MessageBuffer>>,
+    pub transport_events: mpsc::UnboundedSender<TransportEvent>,
+}
+
 impl HubRuntime {
-    pub fn start(
-        transport: WebSocketTransport,
-        mut incoming: mpsc::UnboundedReceiver<TransportMessage>,
-        hub_protocol: Arc<dyn HubProtocol>,
-        transfer_format: TransferFormat,
-        initial_messages: Vec<HubMessage>,
-        server_timeout: Duration,
-        keep_alive_interval: Duration,
-    ) -> Result<Self, Error> {
-        let bus = MessageBus::default();
+    pub fn start(options: HubRuntimeOptions) -> Result<Self, Error> {
+        let HubRuntimeOptions {
+            transport,
+            mut incoming,
+            hub_protocol,
+            transfer_format,
+            initial_messages,
+            server_timeout,
+            keep_alive_interval,
+            bus,
+            message_buffer,
+            transport_events,
+        } = options;
+
         let cached_ping = hub_protocol
             .write_message(&HubMessage::Ping(PingMessage))
             .map_err(|error| Error::Protocol(error.to_string()))?;
@@ -56,13 +81,15 @@ impl HubRuntime {
         let receive_transfer_format = transfer_format;
         let receive_transport = transport.clone();
         let receive_bus = bus.clone();
+        let receive_buffer = message_buffer.clone();
 
         let receive_task = tokio::spawn(async move {
             let dispatch = DispatchContext {
                 bus: receive_bus,
-                transport: receive_transport,
+                transport: receive_transport.clone(),
                 protocol: receive_protocol,
                 transfer_format: receive_transfer_format,
+                message_buffer: receive_buffer,
             };
 
             for message in initial_messages {
@@ -82,6 +109,7 @@ impl HubRuntime {
                 };
 
                 let Some(message) = message else {
+                    let _ = transport_events.send(TransportEvent::Closed(None));
                     break;
                 };
 
@@ -100,6 +128,9 @@ impl HubRuntime {
                     }
                     TransportMessage::Closed(reason) => {
                         debug!(?reason, "transport closed");
+                        if !*receive_shutdown.borrow() {
+                            let _ = transport_events.send(TransportEvent::Closed(reason));
+                        }
                         break;
                     }
                 }
@@ -129,6 +160,7 @@ impl HubRuntime {
             hub_protocol,
             transfer_format,
             bus,
+            message_buffer,
             invocation_id: AtomicI64::new(0),
             cached_ping,
             activity,
@@ -143,13 +175,19 @@ impl HubRuntime {
     }
 
     pub async fn send(&self, message: &HubMessage) -> Result<(), Error> {
-        send_hub_message(
-            &self.transport,
-            self.hub_protocol.as_ref(),
-            self.transfer_format,
-            message,
-        )
-        .await?;
+        if let Some(buffer) = &self.message_buffer {
+            buffer
+                .send(message, &self.transport, self.transfer_format)
+                .await?;
+        } else {
+            send_hub_message(
+                &self.transport,
+                self.hub_protocol.as_ref(),
+                self.transfer_format,
+                message,
+            )
+            .await?;
+        }
         self.activity.notify_one();
         Ok(())
     }
@@ -169,6 +207,13 @@ impl HubRuntime {
         Ok(())
     }
 
+    pub async fn resend_buffered_messages(&self) -> Result<(), Error> {
+        if let Some(buffer) = &self.message_buffer {
+            buffer.resend(&self.transport, self.transfer_format).await?;
+        }
+        Ok(())
+    }
+
     pub async fn shutdown(self) -> Result<(), Error> {
         let _ = self.shutdown_tx.send(true);
 
@@ -182,6 +227,13 @@ impl HubRuntime {
         self.receive_task.abort();
         self.keepalive_task.abort();
         Ok(())
+    }
+
+    pub async fn abort_without_close(&self) {
+        let _ = self.shutdown_tx.send(true);
+        let _ = self.transport.close().await;
+        self.receive_task.abort();
+        self.keepalive_task.abort();
     }
 }
 
@@ -228,8 +280,8 @@ async fn run_keepalive(
             break;
         }
 
-        let server_deadline = tokio::time::Instant::from_std(last_received + server_timeout);
-        let ping_deadline = tokio::time::Instant::from_std(next_ping_at);
+        let server_deadline = last_received + server_timeout;
+        let ping_deadline = next_ping_at;
 
         tokio::select! {
             changed = shutdown.changed() => {
@@ -280,16 +332,20 @@ mod tests {
             ));
 
         let _ = transport.close().await;
+        let (transport_events, _events) = mpsc::unbounded_channel();
 
-        let runtime = HubRuntime::start(
-            WebSocketTransport::disconnected(),
+        let runtime = HubRuntime::start(HubRuntimeOptions {
+            transport: WebSocketTransport::disconnected(),
             incoming,
-            Arc::new(JsonProtocol),
-            TransferFormat::Text,
-            Vec::new(),
-            DEFAULT_SERVER_TIMEOUT,
-            DEFAULT_KEEP_ALIVE_INTERVAL,
-        )
+            hub_protocol: Arc::new(JsonProtocol),
+            transfer_format: TransferFormat::Text,
+            initial_messages: Vec::new(),
+            server_timeout: DEFAULT_SERVER_TIMEOUT,
+            keep_alive_interval: DEFAULT_KEEP_ALIVE_INTERVAL,
+            bus: MessageBus::default(),
+            message_buffer: None,
+            transport_events,
+        })
         .unwrap();
 
         assert_eq!(runtime.next_invocation_id(), "1");
