@@ -25,11 +25,11 @@ Implemented:
 - stateful reconnect with message buffering (`with_stateful_reconnect()`)
 - streaming hub invocations (`stream()` / `StreamInvocation`)
 - automatic handshake version selection (legacy v1 without stateful reconnect, hub protocol v2 with stateful reconnect)
+- lifecycle callbacks: `on_close`, `on_reconnecting`, `on_reconnected`
 
 Planned next:
 
-- client-to-server streaming arguments in `invoke` / `send`
-- FFI / WASM for Flutter and Jaspr
+- disconnect cleanup and server `CloseMessage` handling
 
 ## Example
 

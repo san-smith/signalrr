@@ -1,5 +1,6 @@
 //! SignalR hub connection.
 
+mod callbacks;
 mod dispatch;
 pub(crate) mod message_buffer;
 pub(crate) mod retry;
@@ -15,6 +16,7 @@ use serde_json::Value;
 use tokio::sync::{RwLock, mpsc, watch};
 use tracing::{info, warn};
 
+pub use callbacks::{CloseCallback, ReconnectedCallback, ReconnectingCallback};
 pub use message_buffer::{
     DEFAULT_STATEFUL_RECONNECT_BUFFER_SIZE, MessageBuffer, is_invocation_message,
 };
@@ -30,8 +32,11 @@ use crate::bus::MessageBus;
 use crate::connection::{Connection, ConnectionOptions};
 use crate::error::Error;
 use crate::handshake::{HandshakeRequest, RemainingData};
-use crate::hub::message::{CancelInvocationMessage, HubMessage, InvocationMessage, StreamInvocationMessage};
+use crate::hub::message::{
+    CancelInvocationMessage, HubMessage, InvocationMessage, StreamInvocationMessage,
+};
 use crate::hub::protocol::HubProtocol;
+use crate::hub_connection::callbacks::LifecycleCallbacks;
 use crate::hub_connection::runtime::HubRuntime;
 use crate::negotiate::NegotiateOptions;
 use crate::transport::TransferFormat;
@@ -48,6 +53,7 @@ pub struct HubConnection {
     closing: Arc<AtomicBool>,
     stop_reconnect: watch::Sender<bool>,
     supervisor: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
+    lifecycle: Arc<LifecycleCallbacks>,
 }
 
 impl HubConnection {
@@ -65,7 +71,36 @@ impl HubConnection {
             closing: Arc::new(AtomicBool::new(false)),
             stop_reconnect,
             supervisor: Arc::new(RwLock::new(None)),
+            lifecycle: Arc::new(LifecycleCallbacks::default()),
         }
+    }
+
+    /// Registers a callback invoked when the connection has fully closed.
+    pub async fn on_close<F>(&self, callback: F)
+    where
+        F: Fn(Option<&str>) + Send + Sync + 'static,
+    {
+        self.lifecycle.register_closed(Arc::new(callback)).await;
+    }
+
+    /// Registers a callback invoked when automatic reconnect begins.
+    pub async fn on_reconnecting<F>(&self, callback: F)
+    where
+        F: Fn(Option<&str>) + Send + Sync + 'static,
+    {
+        self.lifecycle
+            .register_reconnecting(Arc::new(callback))
+            .await;
+    }
+
+    /// Registers a callback invoked after a successful automatic reconnect.
+    pub async fn on_reconnected<F>(&self, callback: F)
+    where
+        F: Fn(Option<&str>) + Send + Sync + 'static,
+    {
+        self.lifecycle
+            .register_reconnected(Arc::new(callback))
+            .await;
     }
 
     /// Hub endpoint URL configured on the builder.
@@ -115,7 +150,8 @@ impl HubConnection {
         self.closing.store(false, Ordering::Relaxed);
         let _ = self.stop_reconnect.send(false);
 
-        if self.options.negotiate.use_stateful_reconnect && self.message_buffer.read().await.is_none()
+        if self.options.negotiate.use_stateful_reconnect
+            && self.message_buffer.read().await.is_none()
         {
             *self.message_buffer.write().await = Some(Arc::new(MessageBuffer::new(
                 self.options.hub_protocol.clone(),
@@ -126,6 +162,7 @@ impl HubConnection {
         match self.connect_runtime(false).await {
             Ok(events_rx) => {
                 *self.state.write().await = HubConnectionState::Connected;
+                self.lifecycle.mark_started();
                 self.spawn_supervisor(events_rx).await;
                 Ok(())
             }
@@ -169,6 +206,7 @@ impl HubConnection {
 
         *self.connection_id.write().await = None;
         *self.state.write().await = HubConnectionState::Disconnected;
+        self.lifecycle.invoke_closed(None).await;
         Ok(())
     }
 
@@ -278,8 +316,8 @@ impl HubConnection {
             .as_ref()
             .ok_or(Error::NotConnected)?
             .send(&HubMessage::CancelInvocation(CancelInvocationMessage {
-                    headers: Default::default(),
-                    invocation_id: invocation_id.as_ref().to_string(),
+                headers: Default::default(),
+                invocation_id: invocation_id.as_ref().to_string(),
             }))
             .await
     }
@@ -354,6 +392,7 @@ impl HubConnection {
         let message_buffer = self.message_buffer.clone();
         let reconnect_policy = self.reconnect_policy.clone();
         let closing = self.closing.clone();
+        let lifecycle = self.lifecycle.clone();
         let mut stop_reconnect = self.stop_reconnect.subscribe();
 
         let task = tokio::spawn(async move {
@@ -373,8 +412,11 @@ impl HubConnection {
                             break;
                         }
 
+                        let close_reason = reason.clone();
+
                         let Some(policy) = reconnect_policy.clone() else {
                             *state.write().await = HubConnectionState::Disconnected;
+                            lifecycle.invoke_closed(close_reason.as_deref()).await;
                             break;
                         };
 
@@ -387,33 +429,44 @@ impl HubConnection {
                             current.abort_without_close().await;
                         }
 
-                        *state.write().await = HubConnectionState::Reconnecting;
-
                         let started = Instant::now();
                         let mut attempt = 0usize;
                         let mut retry_reason =
                             reason.unwrap_or_else(|| "connection closed".into());
 
+                        let Some(initial_delay) = policy.next_retry_delay(&RetryContext {
+                            elapsed: started.elapsed(),
+                            previous_retry_count: attempt,
+                            retry_reason: retry_reason.clone(),
+                        }) else {
+                            *state.write().await = HubConnectionState::Disconnected;
+                            lifecycle.invoke_closed(Some(&retry_reason)).await;
+                            break;
+                        };
+
+                        *state.write().await = HubConnectionState::Reconnecting;
+                        lifecycle
+                            .invoke_reconnecting(close_reason.as_deref())
+                            .await;
+
+                        if closing.load(Ordering::Relaxed)
+                            || *state.read().await != HubConnectionState::Reconnecting
+                        {
+                            break;
+                        }
+
+                        attempt += 1;
+                        info!(?initial_delay, attempt, "waiting before reconnect attempt");
+                        tokio::time::sleep(initial_delay).await;
+
                         loop {
                             if closing.load(Ordering::Relaxed) || *stop_reconnect.borrow() {
-                                *state.write().await = HubConnectionState::Disconnected;
-                                return;
+                                break;
                             }
 
-                            let delay = policy.next_retry_delay(&RetryContext {
-                                elapsed: started.elapsed(),
-                                previous_retry_count: attempt,
-                                retry_reason: retry_reason.clone(),
-                            });
-
-                            let Some(delay) = delay else {
-                                *state.write().await = HubConnectionState::Disconnected;
-                                return;
-                            };
-
-                            attempt += 1;
-                            info!(?delay, attempt, "waiting before reconnect attempt");
-                            tokio::time::sleep(delay).await;
+                            if *state.read().await != HubConnectionState::Reconnecting {
+                                break;
+                            }
 
                             match reconnect_once(
                                 &options,
@@ -428,6 +481,9 @@ impl HubConnection {
                                     *state.write().await = HubConnectionState::Connected;
                                     let reconnected_id = connection_id.read().await.clone();
                                     info!(connection_id = ?reconnected_id, "hub reconnected");
+                                    lifecycle
+                                        .invoke_reconnected(reconnected_id.as_deref())
+                                        .await;
                                     events_rx = new_events_rx;
                                     break;
                                 }
@@ -435,6 +491,20 @@ impl HubConnection {
                                     retry_reason = error.to_string();
                                 }
                             }
+
+                            let Some(delay) = policy.next_retry_delay(&RetryContext {
+                                elapsed: started.elapsed(),
+                                previous_retry_count: attempt,
+                                retry_reason: retry_reason.clone(),
+                            }) else {
+                                *state.write().await = HubConnectionState::Disconnected;
+                                lifecycle.invoke_closed(Some(&retry_reason)).await;
+                                return;
+                            };
+
+                            attempt += 1;
+                            info!(?delay, attempt, "waiting before reconnect attempt");
+                            tokio::time::sleep(delay).await;
                         }
                     }
                 }
@@ -582,12 +652,8 @@ mod tests {
         let bus = crate::bus::MessageBus::default();
         let id = "stream-42".to_string();
         let items = bus.register_stream(id.clone()).await.unwrap();
-        let mut stream = HubMethodStream::new(
-            id.clone(),
-            items,
-            Arc::new(RwLock::new(None)),
-            bus.clone(),
-        );
+        let mut stream =
+            HubMethodStream::new(id.clone(), items, Arc::new(RwLock::new(None)), bus.clone());
 
         let ctx = DispatchContext {
             bus: bus.clone(),
@@ -605,13 +671,14 @@ mod tests {
         .await
         .unwrap();
 
-        let _ = ctx.dispatch(HubMessage::Completion(CompletionMessage {
-            headers: Default::default(),
-            invocation_id: id,
-            error: None,
-            result: None,
-        }))
-        .await;
+        let _ = ctx
+            .dispatch(HubMessage::Completion(CompletionMessage {
+                headers: Default::default(),
+                invocation_id: id,
+                error: None,
+                result: None,
+            }))
+            .await;
 
         assert_eq!(
             stream.next().await.unwrap().unwrap(),
