@@ -18,11 +18,13 @@ Implemented:
 - hub message model (`HubMessage`, invocation/completion/ping/…)
 - JSON and MessagePack v2 hub protocols (`HubProtocol`)
 - builder helpers: `with_json_protocol()`, `with_messagepack_protocol()`
+- `invoke` / `send` / `on` hub methods
+- server timeout (30s) and keepalive ping (15s)
 
 Planned next:
 
 - custom `messagepack+brotli` protocol
-- `invoke` / `send` / `on` wired through `MessageBus`
+- streaming hub invocations
 - automatic and stateful reconnect
 
 ## Example
@@ -41,7 +43,15 @@ async fn main() -> Result<(), signalrr::Error> {
         .build();
 
     connection.start().await?;
-    println!("Connected: {:?}", connection.connection_id());
+    println!("Connected: {:?}", connection.connection_id().await);
+
+    connection
+        .on("ReceiveMessage", |args| {
+            println!("Message: {args:?}");
+            None
+        })
+        .await;
+
     connection.close().await?;
     Ok(())
 }

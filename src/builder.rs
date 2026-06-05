@@ -7,6 +7,7 @@ use crate::access_token::{AccessTokenFactory, factory as access_token_factory};
 use crate::handshake::HandshakeRequest;
 use crate::hub::protocol::HubProtocol;
 use crate::hub::{JsonProtocol, MessagePackProtocol};
+use crate::hub_connection::runtime::{DEFAULT_KEEP_ALIVE_INTERVAL, DEFAULT_SERVER_TIMEOUT};
 use crate::hub_connection::{HubConnection, HubConnectionConfig};
 use crate::negotiate::NegotiateOptions;
 use crate::transport::TransferFormat;
@@ -32,6 +33,8 @@ impl HubConnectionBuilder {
                 access_token_factory: None,
                 handshake_timeout: Duration::from_secs(15),
                 hub_protocol: Arc::new(MessagePackProtocol),
+                server_timeout: DEFAULT_SERVER_TIMEOUT,
+                keep_alive_interval: DEFAULT_KEEP_ALIVE_INTERVAL,
             },
             handshake_timeout: Duration::from_secs(15),
         }
@@ -53,11 +56,7 @@ impl HubConnectionBuilder {
         self
     }
 
-    pub fn with_handshake_protocol(
-        mut self,
-        protocol: impl Into<String>,
-        version: i32,
-    ) -> Self {
+    pub fn with_handshake_protocol(mut self, protocol: impl Into<String>, version: i32) -> Self {
         self.config.handshake_request.protocol = protocol.into();
         self.config.handshake_request.version = version;
         self
@@ -106,6 +105,16 @@ impl HubConnectionBuilder {
 
     pub fn with_handshake_timeout(mut self, timeout: Duration) -> Self {
         self.handshake_timeout = timeout;
+        self
+    }
+
+    pub fn with_server_timeout(mut self, timeout: Duration) -> Self {
+        self.config.server_timeout = timeout;
+        self
+    }
+
+    pub fn with_keep_alive_interval(mut self, interval: Duration) -> Self {
+        self.config.keep_alive_interval = interval;
         self
     }
 

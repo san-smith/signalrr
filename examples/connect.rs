@@ -10,7 +10,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let url = std::env::var("SIGNALR_URL").expect("SIGNALR_URL must be set");
     let token = std::env::var("ACCESS_TOKEN").unwrap_or_default();
 
-    let mut connection = HubConnection::builder(url)
+    let connection = HubConnection::builder(url)
         .with_access_token(move || {
             let token = token.clone();
             async move { Ok(token) }
@@ -18,7 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build();
 
     connection.start().await?;
-    println!("Connected: {:?}", connection.connection_id());
+    println!("Connected: {:?}", connection.connection_id().await);
     connection.close().await?;
     Ok(())
 }

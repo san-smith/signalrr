@@ -21,10 +21,19 @@ pub enum TransportMessage {
     Closed(Option<String>),
 }
 
+#[derive(Clone)]
+struct WebSocketTransportInner {
+    sender: Arc<
+        Mutex<futures_util::stream::SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>,
+    >,
+    read_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    closed: Arc<Mutex<bool>>,
+}
+
 /// WebSocket transport handle.
+#[derive(Clone)]
 pub struct WebSocketTransport {
-    sender: Arc<Mutex<futures_util::stream::SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>>,
-    read_task: tokio::task::JoinHandle<()>,
+    inner: Option<WebSocketTransportInner>,
 }
 
 impl WebSocketTransport {
@@ -54,12 +63,26 @@ impl WebSocketTransport {
 
         let read_task = tokio::spawn(read_loop(read, incoming_tx));
 
-        Ok((Self { sender, read_task }, incoming_rx))
+        Ok((
+            Self {
+                inner: Some(WebSocketTransportInner {
+                    sender,
+                    read_task: Arc::new(Mutex::new(Some(read_task))),
+                    closed: Arc::new(Mutex::new(false)),
+                }),
+            },
+            incoming_rx,
+        ))
     }
 
     /// Sends a text frame.
     pub async fn send_text(&self, payload: impl Into<String>) -> Result<(), Error> {
-        self.sender
+        let Some(inner) = &self.inner else {
+            return Ok(());
+        };
+
+        inner
+            .sender
             .lock()
             .await
             .send(Message::Text(payload.into()))
@@ -69,7 +92,12 @@ impl WebSocketTransport {
 
     /// Sends a binary frame.
     pub async fn send_binary(&self, payload: Vec<u8>) -> Result<(), Error> {
-        self.sender
+        let Some(inner) = &self.inner else {
+            return Ok(());
+        };
+
+        inner
+            .sender
             .lock()
             .await
             .send(Message::Binary(payload))
@@ -78,15 +106,35 @@ impl WebSocketTransport {
     }
 
     /// Closes the WebSocket connection.
-    pub async fn close(self) -> Result<(), Error> {
-        self.sender
+    pub async fn close(&self) -> Result<(), Error> {
+        let Some(inner) = &self.inner else {
+            return Ok(());
+        };
+
+        let mut closed = inner.closed.lock().await;
+        if *closed {
+            return Ok(());
+        }
+        *closed = true;
+
+        inner
+            .sender
             .lock()
             .await
             .close()
             .await
             .map_err(|error| Error::WebSocket(Box::new(error)))?;
-        self.read_task.abort();
+
+        if let Some(task) = inner.read_task.lock().await.take() {
+            task.abort();
+        }
+
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn disconnected() -> Self {
+        Self { inner: None }
     }
 }
 
@@ -131,8 +179,7 @@ mod tests {
 
     #[test]
     fn append_access_token_adds_query_parameter() {
-        let url = append_access_token("https://example.com/signalr?id=abc", Some("token"))
-            .unwrap();
+        let url = append_access_token("https://example.com/signalr?id=abc", Some("token")).unwrap();
         assert!(url.contains("access_token=token"));
         assert!(url.contains("id=abc"));
     }

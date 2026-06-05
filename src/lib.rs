@@ -12,7 +12,7 @@
 //!         .build();
 //!
 //!     connection.start().await?;
-//!     println!("Connected: {:?}", connection.connection_id());
+//!     println!("Connected: {:?}", connection.connection_id().await);
 //!     connection.close().await?;
 //!     Ok(())
 //! }
@@ -33,19 +33,21 @@ pub mod hub_connection;
 
 pub use access_token::{AccessTokenFactory, factory as access_token_factory};
 pub use builder::HubConnectionBuilder;
+pub use bus::ClientMethodHandler;
 pub use error::{Error, FramingError};
-pub use framing::{BinaryMessageFormat, TextMessageFormat, RECORD_SEPARATOR};
+pub use framing::{BinaryMessageFormat, RECORD_SEPARATOR, TextMessageFormat};
 pub use handshake::{
     HandshakeInput, HandshakeProtocol, HandshakeRequest, HandshakeResponse, HandshakeResult,
     RemainingData,
 };
 pub use hub::{
-    AckMessage, CancelInvocationMessage, CloseMessage, CompletionMessage, HubMessage,
-    HubProtocol, HubProtocolInput, InvocationMessage, JsonProtocol, MessagePackProtocol,
-    MessageType, PingMessage, ProtocolError, SequenceMessage, StreamInvocationMessage,
-    StreamItemMessage,
+    AckMessage, CancelInvocationMessage, CloseMessage, CompletionMessage, HubMessage, HubProtocol,
+    HubProtocolInput, InvocationMessage, JsonProtocol, MessagePackProtocol, MessageType,
+    PingMessage, ProtocolError, SequenceMessage, StreamInvocationMessage, StreamItemMessage,
 };
-pub use hub_connection::{HubConnection, HubConnectionState};
+pub use hub_connection::{
+    DEFAULT_KEEP_ALIVE_INTERVAL, DEFAULT_SERVER_TIMEOUT, HubConnection, HubConnectionState,
+};
 pub use negotiate::{NegotiateOptions, NegotiateResponse, NegotiateResult, negotiate};
 pub use transport::{TransferFormat, TransportMessage, WebSocketTransport};
 

@@ -7,6 +7,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// Handler invoked when the server calls a client hub method.
+pub type ClientMethodHandler = Arc<dyn Fn(Vec<Value>) -> Option<Value> + Send + Sync>;
+
 /// A pending invocation awaiting a response from the server.
 pub enum PendingInvocation {
     /// Awaiting a single `Completion` message.
@@ -15,48 +18,43 @@ pub enum PendingInvocation {
     Stream(mpsc::UnboundedSender<Result<Value, String>>),
 }
 
-/// Events received from the SignalR server.
-#[derive(Debug)]
-pub enum ServerEvent {
-    Invocation {
-        target: String,
-        arguments: Vec<Value>,
-    },
-    Completion {
-        id: String,
-        result: Option<Value>,
-        error: Option<String>,
-    },
-}
-
 /// Coordinates pending invocations and server event handlers.
 #[derive(Clone)]
 pub struct MessageBus {
-    pub(crate) handlers: Arc<RwLock<HashMap<String, Box<dyn Fn(Vec<Value>) + Send + Sync>>>>,
-    pub(crate) pending: Arc<RwLock<HashMap<String, PendingInvocation>>>,
-    #[allow(dead_code)]
-    pub(crate) event_tx: mpsc::UnboundedSender<ServerEvent>,
+    handlers: Arc<RwLock<HashMap<String, ClientMethodHandler>>>,
+    pending: Arc<RwLock<HashMap<String, PendingInvocation>>>,
 }
 
 impl MessageBus {
-    pub fn new() -> (Self, mpsc::UnboundedReceiver<ServerEvent>) {
-        let (event_tx, event_rx) = mpsc::unbounded();
+    pub fn new() -> (Self, mpsc::UnboundedReceiver<()>) {
+        let (_event_tx, event_rx) = mpsc::unbounded();
         let bus = Self {
             handlers: Arc::new(RwLock::new(HashMap::new())),
             pending: Arc::new(RwLock::new(HashMap::new())),
-            event_tx,
         };
         (bus, event_rx)
     }
 
-    pub async fn register_handler<F>(&self, target: String, handler: F)
-    where
-        F: Fn(Vec<Value>) + Send + Sync + 'static,
-    {
+    pub async fn register_handler(&self, target: String, handler: ClientMethodHandler) {
         self.handlers
             .write()
             .await
-            .insert(target, Box::new(handler));
+            .insert(target.to_ascii_lowercase(), handler);
+    }
+
+    pub async fn remove_handler(&self, target: &str) {
+        self.handlers
+            .write()
+            .await
+            .remove(&target.to_ascii_lowercase());
+    }
+
+    pub async fn handler_for(&self, target: &str) -> Option<ClientMethodHandler> {
+        self.handlers
+            .read()
+            .await
+            .get(&target.to_ascii_lowercase())
+            .cloned()
     }
 
     pub async fn register_pending(
@@ -86,12 +84,6 @@ impl MessageBus {
         }
     }
 
-    pub async fn dispatch_invocation(&self, target: String, arguments: Vec<Value>) {
-        if let Some(handler) = self.handlers.read().await.get(&target) {
-            handler(arguments);
-        }
-    }
-
     pub async fn register_stream(
         &self,
         id: String,
@@ -111,35 +103,46 @@ impl MessageBus {
     }
 }
 
+impl Default for MessageBus {
+    fn default() -> Self {
+        Self::new().0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use futures_util::StreamExt;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     #[tokio::test]
     async fn register_and_dispatch_handler() {
-        let (bus, _rx) = MessageBus::new();
+        let bus = MessageBus::default();
         let target = "TestEvent".to_string();
         let args = vec![Value::String("hello".to_string())];
 
-        let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let called = Arc::new(AtomicBool::new(false));
         let called_clone = called.clone();
         let args_clone = args.clone();
 
-        bus.register_handler(target.clone(), move |received_args| {
-            assert_eq!(received_args, args_clone);
-            called_clone.store(true, std::sync::atomic::Ordering::Relaxed);
-        })
+        bus.register_handler(
+            target.clone(),
+            Arc::new(move |received_args| {
+                assert_eq!(received_args, args_clone);
+                called_clone.store(true, Ordering::Relaxed);
+                None
+            }),
+        )
         .await;
 
-        bus.dispatch_invocation(target, args).await;
-        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-        assert!(called.load(std::sync::atomic::Ordering::Relaxed));
+        let handler = bus.handler_for(&target).await.unwrap();
+        handler(args);
+        assert!(called.load(Ordering::Relaxed));
     }
 
     #[tokio::test]
     async fn register_and_complete_invocation() {
-        let (bus, _rx) = MessageBus::new();
+        let bus = MessageBus::default();
         let id = "test_id".to_string();
         let result = Ok(Value::String("success".to_string()));
 
@@ -151,14 +154,14 @@ mod tests {
 
     #[tokio::test]
     async fn complete_nonexistent_invocation() {
-        let (bus, _rx) = MessageBus::new();
+        let bus = MessageBus::default();
         bus.complete_invocation("nonexistent".to_string(), Ok(Value::Null))
             .await;
     }
 
     #[tokio::test]
     async fn register_and_stream_items() {
-        let (bus, _rx) = MessageBus::new();
+        let bus = MessageBus::default();
         let id = "stream_id".to_string();
         let mut rx = bus.register_stream(id.clone()).await.unwrap();
 
@@ -167,10 +170,7 @@ mod tests {
         bus.send_stream_item(id, Ok(Value::String("done".to_string())))
             .await;
 
-        assert_eq!(
-            rx.try_next().unwrap(),
-            Some(Ok(Value::Number(42.into())))
-        );
+        assert_eq!(rx.try_next().unwrap(), Some(Ok(Value::Number(42.into()))));
         assert_eq!(
             rx.try_next().unwrap(),
             Some(Ok(Value::String("done".to_string())))
@@ -179,7 +179,7 @@ mod tests {
 
     #[tokio::test]
     async fn stream_completion_with_error() {
-        let (bus, _rx) = MessageBus::new();
+        let bus = MessageBus::default();
         let id = "stream_id".to_string();
         let mut rx = bus.register_stream(id.clone()).await.unwrap();
 

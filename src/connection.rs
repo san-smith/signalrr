@@ -9,11 +9,14 @@ use tracing::{debug, info};
 
 use crate::access_token::AccessTokenFactory;
 use crate::error::Error;
-use crate::handshake::{HandshakeInput, HandshakeProtocol, HandshakeRequest, HandshakeResult, RemainingData};
+use crate::handshake::{
+    HandshakeInput, HandshakeProtocol, HandshakeRequest, HandshakeResult, RemainingData,
+};
 use crate::hub::message::HubMessage;
 use crate::hub::protocol::{HubProtocol, HubProtocolInput};
+use crate::hub_connection::runtime::{DEFAULT_KEEP_ALIVE_INTERVAL, DEFAULT_SERVER_TIMEOUT};
 use crate::negotiate::{NegotiateOptions, NegotiateResult, build_websocket_url, negotiate};
-use crate::transport::{TransferFormat, WebSocketTransport, TransportMessage};
+use crate::transport::{TransferFormat, TransportMessage, WebSocketTransport};
 
 const DEFAULT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -27,6 +30,8 @@ pub struct ConnectionOptions {
     pub handshake_timeout: Duration,
     pub access_token_factory: Option<AccessTokenFactory>,
     pub hub_protocol: Arc<dyn HubProtocol>,
+    pub server_timeout: Duration,
+    pub keep_alive_interval: Duration,
 }
 
 impl ConnectionOptions {
@@ -42,6 +47,8 @@ impl ConnectionOptions {
             handshake_timeout: DEFAULT_HANDSHAKE_TIMEOUT,
             access_token_factory: None,
             hub_protocol: Arc::new(crate::hub::MessagePackProtocol),
+            server_timeout: DEFAULT_SERVER_TIMEOUT,
+            keep_alive_interval: DEFAULT_KEEP_ALIVE_INTERVAL,
         }
     }
 }
@@ -128,6 +135,14 @@ impl Connection {
 
     pub fn initial_messages(&self) -> &[HubMessage] {
         &self.initial_messages
+    }
+
+    pub fn transport(&self) -> WebSocketTransport {
+        self.transport.clone()
+    }
+
+    pub fn take_incoming(&mut self) -> mpsc::UnboundedReceiver<TransportMessage> {
+        std::mem::replace(&mut self.incoming, mpsc::unbounded_channel().1)
     }
 
     pub async fn close(self) -> Result<(), Error> {
