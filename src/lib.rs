@@ -38,7 +38,7 @@ pub use error::{Error, FramingError};
 pub use framing::{BinaryMessageFormat, RECORD_SEPARATOR, TextMessageFormat};
 pub use handshake::{
     HandshakeInput, HandshakeProtocol, HandshakeRequest, HandshakeResponse, HandshakeResult,
-    RemainingData,
+    LEGACY_HANDSHAKE_VERSION, RemainingData, resolve_handshake_version,
 };
 pub use hub::{
     AckMessage, CancelInvocationMessage, CloseMessage, CompletionMessage, HubMessage, HubProtocol,

@@ -34,6 +34,7 @@ impl HubConnectionBuilder {
                     protocol: "messagepack".into(),
                     version: 2,
                 },
+                handshake_version_override: None,
                 transfer_format: TransferFormat::Binary,
                 access_token_factory: None,
                 handshake_timeout: Duration::from_secs(15),
@@ -49,9 +50,6 @@ impl HubConnectionBuilder {
 
     pub fn with_stateful_reconnect(mut self, enabled: bool) -> Self {
         self.config.negotiate.use_stateful_reconnect = enabled;
-        if enabled {
-            self.config.handshake_request.version = 2;
-        }
         self
     }
 
@@ -77,17 +75,16 @@ impl HubConnectionBuilder {
         self
     }
 
+    /// Sets an explicit handshake protocol name and version, bypassing automatic selection.
     pub fn with_handshake_protocol(mut self, protocol: impl Into<String>, version: i32) -> Self {
         self.config.handshake_request.protocol = protocol.into();
-        self.config.handshake_request.version = version;
+        self.config.handshake_version_override = Some(version);
         self
     }
 
     pub fn with_hub_protocol(mut self, protocol: Arc<dyn HubProtocol>) -> Self {
-        self.config.handshake_request = HandshakeRequest {
-            protocol: protocol.name().to_string(),
-            version: protocol.version(),
-        };
+        self.config.handshake_request.protocol = protocol.name().to_string();
+        self.config.handshake_version_override = None;
         self.config.transfer_format = protocol.transfer_format();
         self.config.hub_protocol = protocol;
         self

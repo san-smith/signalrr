@@ -4,11 +4,36 @@ use crate::error::{Error, FramingError};
 use crate::framing::{RECORD_SEPARATOR, TextMessageFormat};
 use serde::{Deserialize, Serialize};
 
+/// Hub protocol handshake version used for compatibility with older servers.
+pub const LEGACY_HANDSHAKE_VERSION: i32 = 1;
+
 /// Client handshake request payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct HandshakeRequest {
     pub protocol: String,
     pub version: i32,
+}
+
+/// Resolves the hub protocol version to send in the SignalR handshake.
+///
+/// Matches the reference client behavior:
+/// - stateful reconnect uses the active [`HubProtocol::version()`] (typically 2)
+/// - otherwise version [`LEGACY_HANDSHAKE_VERSION`] is sent for older servers
+///
+/// An explicit override from [`crate::HubConnectionBuilder::with_handshake_protocol`]
+/// takes precedence over automatic selection.
+pub fn resolve_handshake_version(
+    use_stateful_reconnect: bool,
+    hub_protocol_version: i32,
+    override_version: Option<i32>,
+) -> i32 {
+    override_version.unwrap_or_else(|| {
+        if use_stateful_reconnect {
+            hub_protocol_version
+        } else {
+            LEGACY_HANDSHAKE_VERSION
+        }
+    })
 }
 
 /// Server handshake response payload.
@@ -109,6 +134,25 @@ fn split_binary_handshake(bytes: &[u8]) -> Result<(String, Option<RemainingData>
 mod tests {
     use super::*;
     use crate::framing::RECORD_SEPARATOR;
+
+    #[test]
+    fn resolve_handshake_version_uses_legacy_without_stateful_reconnect() {
+        assert_eq!(
+            resolve_handshake_version(false, 2, None),
+            LEGACY_HANDSHAKE_VERSION
+        );
+    }
+
+    #[test]
+    fn resolve_handshake_version_uses_hub_protocol_with_stateful_reconnect() {
+        assert_eq!(resolve_handshake_version(true, 2, None), 2);
+    }
+
+    #[test]
+    fn resolve_handshake_version_honors_explicit_override() {
+        assert_eq!(resolve_handshake_version(false, 2, Some(3)), 3);
+        assert_eq!(resolve_handshake_version(true, 2, Some(1)), 1);
+    }
 
     #[test]
     fn write_request_serializes_json_with_separator() {

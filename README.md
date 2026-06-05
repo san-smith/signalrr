@@ -24,6 +24,7 @@ Implemented:
 - automatic reconnect with configurable [`RetryPolicy`](https://docs.rs/signalrr/latest/signalrr/trait.RetryPolicy.html)
 - stateful reconnect with message buffering (`with_stateful_reconnect()`)
 - streaming hub invocations (`stream()` / `StreamInvocation`)
+- automatic handshake version selection (legacy v1 without stateful reconnect, hub protocol v2 with stateful reconnect)
 
 Planned next:
 

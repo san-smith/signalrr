@@ -11,6 +11,7 @@ use crate::access_token::AccessTokenFactory;
 use crate::error::Error;
 use crate::handshake::{
     HandshakeInput, HandshakeProtocol, HandshakeRequest, HandshakeResult, RemainingData,
+    resolve_handshake_version,
 };
 use crate::hub::message::HubMessage;
 use crate::hub::protocol::{HubProtocol, HubProtocolInput};
@@ -28,6 +29,7 @@ pub struct ConnectionOptions {
     pub base_url: String,
     pub negotiate: NegotiateOptions,
     pub handshake_request: HandshakeRequest,
+    pub handshake_version_override: Option<i32>,
     pub transfer_format: TransferFormat,
     pub handshake_timeout: Duration,
     pub access_token_factory: Option<AccessTokenFactory>,
@@ -47,6 +49,7 @@ impl ConnectionOptions {
                 protocol: "messagepack".into(),
                 version: 2,
             },
+            handshake_version_override: None,
             transfer_format: TransferFormat::Binary,
             handshake_timeout: DEFAULT_HANDSHAKE_TIMEOUT,
             access_token_factory: None,
@@ -99,7 +102,16 @@ impl Connection {
         let (transport, mut incoming) =
             WebSocketTransport::connect(&websocket_url, effective_access_token.as_deref()).await?;
 
-        let handshake_payload = HandshakeProtocol.write_request(&options.handshake_request)?;
+        let handshake_request = HandshakeRequest {
+            protocol: options.handshake_request.protocol.clone(),
+            version: resolve_handshake_version(
+                options.negotiate.use_stateful_reconnect,
+                options.hub_protocol.version(),
+                options.handshake_version_override,
+            ),
+        };
+
+        let handshake_payload = HandshakeProtocol.write_request(&handshake_request)?;
         transport.send_text(handshake_payload).await?;
 
         let handshake_message = time::timeout(options.handshake_timeout, incoming.recv())
@@ -116,7 +128,8 @@ impl Connection {
 
         info!(
             connection_id = connection_id.as_deref().unwrap_or("unknown"),
-            protocol = %options.handshake_request.protocol,
+            protocol = %handshake_request.protocol,
+            version = handshake_request.version,
             "signalr handshake completed"
         );
 
