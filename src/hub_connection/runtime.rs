@@ -1,7 +1,7 @@
 //! Background receive loop and keepalive for an active hub connection.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 
 use tokio::sync::{Notify, mpsc, watch};
 use tokio::task::JoinHandle;
@@ -22,7 +22,15 @@ pub const DEFAULT_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(15);
 /// Event emitted when the transport closes unexpectedly.
 #[derive(Debug, Clone)]
 pub enum TransportEvent {
-    Closed(Option<String>),
+    Closed(TransportCloseInfo),
+}
+
+/// Reason and reconnect hint reported when the transport closes.
+#[derive(Debug, Clone, Default)]
+pub struct TransportCloseInfo {
+    pub error: Option<String>,
+    /// When `Some(false)`, automatic reconnect must not be attempted.
+    pub allow_reconnect: Option<bool>,
 }
 
 /// Active hub connection runtime: transport I/O, dispatch, and keepalive tasks.
@@ -82,6 +90,8 @@ impl HubRuntime {
         let receive_transport = transport.clone();
         let receive_bus = bus.clone();
         let receive_buffer = message_buffer.clone();
+        let transport_close_signaled = Arc::new(AtomicBool::new(false));
+        let receive_close_signaled = transport_close_signaled.clone();
 
         let receive_task = tokio::spawn(async move {
             let dispatch = DispatchContext {
@@ -90,6 +100,8 @@ impl HubRuntime {
                 protocol: receive_protocol,
                 transfer_format: receive_transfer_format,
                 message_buffer: receive_buffer,
+                transport_events: transport_events.clone(),
+                transport_close_signaled: receive_close_signaled,
             };
 
             for message in initial_messages {
@@ -109,7 +121,12 @@ impl HubRuntime {
                 };
 
                 let Some(message) = message else {
-                    let _ = transport_events.send(TransportEvent::Closed(None));
+                    if !transport_close_signaled.load(Ordering::Relaxed) {
+                        let _ = transport_events.send(TransportEvent::Closed(TransportCloseInfo {
+                            error: None,
+                            allow_reconnect: None,
+                        }));
+                    }
                     break;
                 };
 
@@ -128,8 +145,14 @@ impl HubRuntime {
                     }
                     TransportMessage::Closed(reason) => {
                         debug!(?reason, "transport closed");
-                        if !*receive_shutdown.borrow() {
-                            let _ = transport_events.send(TransportEvent::Closed(reason));
+                        if !*receive_shutdown.borrow()
+                            && !transport_close_signaled.load(Ordering::Relaxed)
+                        {
+                            let _ =
+                                transport_events.send(TransportEvent::Closed(TransportCloseInfo {
+                                    error: reason,
+                                    allow_reconnect: None,
+                                }));
                         }
                         break;
                     }

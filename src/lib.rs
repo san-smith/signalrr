@@ -33,7 +33,7 @@ pub mod hub_connection;
 
 pub use access_token::{AccessTokenFactory, factory as access_token_factory};
 pub use builder::HubConnectionBuilder;
-pub use bus::ClientMethodHandler;
+pub use bus::{ClientMethodHandler, INVOCATION_CANCELED_MESSAGE, MessageBus};
 pub use error::{Error, FramingError};
 pub use framing::{BinaryMessageFormat, RECORD_SEPARATOR, TextMessageFormat};
 pub use handshake::{
@@ -51,10 +51,7 @@ pub use hub_connection::{
     CloseCallback, DEFAULT_KEEP_ALIVE_INTERVAL, DEFAULT_SERVER_TIMEOUT,
     DEFAULT_STATEFUL_RECONNECT_BUFFER_SIZE, DefaultReconnectPolicy, HubConnection,
     HubConnectionState, HubMethodStream, ReconnectedCallback, ReconnectingCallback, RetryContext,
-    RetryPolicy,
+    RetryPolicy, TransportCloseInfo,
 };
 pub use negotiate::{NegotiateOptions, NegotiateResponse, NegotiateResult, negotiate};
 pub use transport::{TransferFormat, TransportMessage, WebSocketTransport};
-
-#[doc(hidden)]
-pub use bus::MessageBus;

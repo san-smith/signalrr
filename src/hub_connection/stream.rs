@@ -49,7 +49,9 @@ impl HubMethodStream {
     }
 
     async fn send_cancel(&self) -> Result<(), Error> {
-        self.bus.remove_pending(&self.invocation_id).await;
+        if !self.bus.remove_pending(&self.invocation_id).await {
+            return Ok(());
+        }
 
         let runtime = self.runtime.read().await;
         let runtime = runtime.as_ref().ok_or(Error::NotConnected)?;
@@ -59,6 +61,30 @@ impl HubMethodStream {
                 invocation_id: self.invocation_id.clone(),
             }))
             .await
+    }
+}
+
+impl Drop for HubMethodStream {
+    fn drop(&mut self) {
+        self.items.close();
+        let id = self.invocation_id.clone();
+        let bus = self.bus.clone();
+        let runtime = self.runtime.clone();
+        tokio::spawn(async move {
+            if !bus.remove_pending(&id).await {
+                return;
+            }
+            let runtime = runtime.read().await;
+            let Some(runtime) = runtime.as_ref() else {
+                return;
+            };
+            let _ = runtime
+                .send(&HubMessage::CancelInvocation(CancelInvocationMessage {
+                    headers: Default::default(),
+                    invocation_id: id,
+                }))
+                .await;
+        });
     }
 }
 

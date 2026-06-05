@@ -22,13 +22,14 @@ pub use message_buffer::{
 };
 pub use retry::{DefaultReconnectPolicy, RetryContext, RetryPolicy};
 pub use runtime::{
-    DEFAULT_KEEP_ALIVE_INTERVAL, DEFAULT_SERVER_TIMEOUT, HubRuntimeOptions, TransportEvent,
+    DEFAULT_KEEP_ALIVE_INTERVAL, DEFAULT_SERVER_TIMEOUT, HubRuntimeOptions, TransportCloseInfo,
+    TransportEvent,
 };
 pub use state::HubConnectionState;
 pub use stream::HubMethodStream;
 
 use crate::access_token::AccessTokenFactory;
-use crate::bus::MessageBus;
+use crate::bus::{MessageBus, INVOCATION_CANCELED_MESSAGE};
 use crate::connection::{Connection, ConnectionOptions};
 use crate::error::Error;
 use crate::handshake::{HandshakeRequest, RemainingData};
@@ -197,6 +198,10 @@ impl HubConnection {
         if let Some(buffer) = self.message_buffer.read().await.as_ref() {
             buffer.dispose().await;
         }
+
+        self.bus
+            .cancel_all_pending(INVOCATION_CANCELED_MESSAGE)
+            .await;
 
         if let Some(runtime) = self.runtime.write().await.take() {
             runtime.shutdown().await?;
@@ -404,7 +409,7 @@ impl HubConnection {
                         }
                     }
                     event = events_rx.recv() => {
-                        let Some(TransportEvent::Closed(reason)) = event else {
+                        let Some(TransportEvent::Closed(info)) = event else {
                             break;
                         };
 
@@ -412,15 +417,27 @@ impl HubConnection {
                             break;
                         }
 
-                        let close_reason = reason.clone();
+                        let cancellation = info
+                            .error
+                            .clone()
+                            .unwrap_or_else(|| INVOCATION_CANCELED_MESSAGE.to_string());
+                        bus.cancel_all_pending(cancellation).await;
+
+                        let close_reason = info.error.as_deref();
 
                         let Some(policy) = reconnect_policy.clone() else {
                             *state.write().await = HubConnectionState::Disconnected;
-                            lifecycle.invoke_closed(close_reason.as_deref()).await;
+                            lifecycle.invoke_closed(close_reason).await;
                             break;
                         };
 
-                        warn!(?reason, "hub transport closed, attempting reconnect");
+                        if info.allow_reconnect == Some(false) {
+                            *state.write().await = HubConnectionState::Disconnected;
+                            lifecycle.invoke_closed(close_reason).await;
+                            break;
+                        }
+
+                        warn!(?info.error, "hub transport closed, attempting reconnect");
                         if let Some(buffer) = message_buffer.read().await.as_ref() {
                             buffer.disconnected();
                         }
@@ -431,8 +448,10 @@ impl HubConnection {
 
                         let started = Instant::now();
                         let mut attempt = 0usize;
-                        let mut retry_reason =
-                            reason.unwrap_or_else(|| "connection closed".into());
+                        let mut retry_reason = info
+                            .error
+                            .clone()
+                            .unwrap_or_else(|| "connection closed".into());
 
                         let Some(initial_delay) = policy.next_retry_delay(&RetryContext {
                             elapsed: started.elapsed(),
@@ -446,7 +465,7 @@ impl HubConnection {
 
                         *state.write().await = HubConnectionState::Reconnecting;
                         lifecycle
-                            .invoke_reconnecting(close_reason.as_deref())
+                            .invoke_reconnecting(close_reason)
                             .await;
 
                         if closing.load(Ordering::Relaxed)
@@ -603,7 +622,20 @@ mod tests {
     use crate::hub_connection::dispatch::DispatchContext;
     use crate::transport::WebSocketTransport;
     use std::sync::Arc;
-    use std::sync::atomic::Ordering;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    fn test_dispatch_context(bus: crate::bus::MessageBus) -> DispatchContext {
+        let (transport_events, _events_rx) = mpsc::unbounded_channel();
+        DispatchContext {
+            bus,
+            transport: WebSocketTransport::disconnected(),
+            protocol: Arc::new(JsonProtocol),
+            transfer_format: TransferFormat::Text,
+            message_buffer: None,
+            transport_events,
+            transport_close_signaled: Arc::new(AtomicBool::new(false)),
+        }
+    }
 
     #[tokio::test]
     async fn start_requires_disconnected_state() {
@@ -655,13 +687,7 @@ mod tests {
         let mut stream =
             HubMethodStream::new(id.clone(), items, Arc::new(RwLock::new(None)), bus.clone());
 
-        let ctx = DispatchContext {
-            bus: bus.clone(),
-            transport: WebSocketTransport::disconnected(),
-            protocol: Arc::new(JsonProtocol),
-            transfer_format: TransferFormat::Text,
-            message_buffer: None,
-        };
+        let ctx = test_dispatch_context(bus.clone());
 
         ctx.dispatch(HubMessage::StreamItem(StreamItemMessage {
             headers: Default::default(),
@@ -690,13 +716,7 @@ mod tests {
     #[tokio::test]
     async fn dispatch_routes_completion_to_pending_invocation() {
         let bus = crate::bus::MessageBus::default();
-        let ctx = DispatchContext {
-            bus: bus.clone(),
-            transport: WebSocketTransport::disconnected(),
-            protocol: Arc::new(JsonProtocol),
-            transfer_format: TransferFormat::Text,
-            message_buffer: None,
-        };
+        let ctx = test_dispatch_context(bus.clone());
 
         let response = bus.register_pending("42".into()).await.unwrap();
         ctx.dispatch(HubMessage::Completion(CompletionMessage {
@@ -726,13 +746,7 @@ mod tests {
         )
         .await;
 
-        let ctx = DispatchContext {
-            bus: bus.clone(),
-            transport: WebSocketTransport::disconnected(),
-            protocol: Arc::new(MessagePackProtocol),
-            transfer_format: TransferFormat::Binary,
-            message_buffer: None,
-        };
+        let ctx = test_dispatch_context(bus.clone());
 
         ctx.dispatch(HubMessage::Invocation(InvocationMessage {
             headers: Default::default(),

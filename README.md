@@ -26,10 +26,11 @@ Implemented:
 - streaming hub invocations (`stream()` / `StreamInvocation`)
 - automatic handshake version selection (legacy v1 without stateful reconnect, hub protocol v2 with stateful reconnect)
 - lifecycle callbacks: `on_close`, `on_reconnecting`, `on_reconnected`
+- pending invocation cancellation on disconnect and server `CloseMessage` handling
 
 Planned next:
 
-- disconnect cleanup and server `CloseMessage` handling
+- multiple client handlers per hub method
 
 ## Example
 

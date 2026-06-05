@@ -7,6 +7,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// Error message used when pending invocations are canceled due to connection loss.
+pub const INVOCATION_CANCELED_MESSAGE: &str =
+    "Invocation canceled due to the underlying connection being closed.";
+
 /// Handler invoked when the server calls a client hub method.
 pub type ClientMethodHandler = Arc<dyn Fn(Vec<Value>) -> Option<Value> + Send + Sync>;
 
@@ -102,8 +106,25 @@ impl MessageBus {
         }
     }
 
-    pub async fn remove_pending(&self, id: &str) {
-        self.pending.write().await.remove(id);
+    pub async fn remove_pending(&self, id: &str) -> bool {
+        self.pending.write().await.remove(id).is_some()
+    }
+
+    /// Fails all pending invocations and streams with the given error message.
+    pub async fn cancel_all_pending(&self, error: impl Into<String>) {
+        let error = error.into();
+        let pending = self.pending.write().await.drain().collect::<Vec<_>>();
+
+        for (_, invocation) in pending {
+            match invocation {
+                PendingInvocation::Single(tx) => {
+                    let _ = tx.send(Err(error.clone()));
+                }
+                PendingInvocation::Stream(tx) => {
+                    let _ = tx.unbounded_send(Err(error.clone()));
+                }
+            }
+        }
     }
 }
 
@@ -193,5 +214,23 @@ mod tests {
         let result = rx.next().await.unwrap();
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "Stream failed");
+    }
+
+    #[tokio::test]
+    async fn cancel_all_pending_fails_invoke_and_stream() {
+        use futures_util::StreamExt;
+
+        let bus = MessageBus::default();
+        let invoke = bus.register_pending("invoke-1".into()).await.unwrap();
+        let mut stream = bus.register_stream("stream-1".into()).await.unwrap();
+
+        bus.cancel_all_pending("connection lost").await;
+
+        assert_eq!(invoke.await.unwrap(), Err("connection lost".into()));
+        assert_eq!(
+            stream.next().await,
+            Some(Err("connection lost".into()))
+        );
+        assert!(stream.next().await.is_none());
     }
 }
