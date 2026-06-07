@@ -10,7 +10,9 @@ pub const LEGACY_HANDSHAKE_VERSION: i32 = 1;
 /// Client handshake request payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct HandshakeRequest {
+    /// The protocol name (e.g., "json" or "messagepack").
     pub protocol: String,
+    /// The version of the hub protocol to use.
     pub version: i32,
 }
 
@@ -39,8 +41,10 @@ pub fn resolve_handshake_version(
 /// Server handshake response payload.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct HandshakeResponse {
+    /// An error message if the handshake failed.
     #[serde(default)]
     pub error: Option<String>,
+    /// The minor version of the hub protocol.
     #[serde(default, rename = "minorVersion")]
     pub minor_version: Option<i32>,
 }
@@ -48,14 +52,18 @@ pub struct HandshakeResponse {
 /// Remaining data after the handshake message in the transport buffer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RemainingData {
+    /// Textual data remaining in the buffer.
     Text(String),
+    /// Binary data remaining in the buffer.
     Bytes(Vec<u8>),
 }
 
 /// Parsed handshake response and any trailing transport data.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HandshakeResult {
+    /// The parsed server response.
     pub response: HandshakeResponse,
+    /// Any additional data left in the buffer after the handshake message.
     pub remaining: Option<RemainingData>,
 }
 
@@ -92,10 +100,17 @@ impl HandshakeProtocol {
 
 /// Handshake input from the transport layer.
 pub enum HandshakeInput<'a> {
+    /// Textual handshake data.
     Text(&'a str),
+    /// Binary handshake data.
     Binary(&'a [u8]),
 }
 
+/// Splits a text buffer into the handshake message and any remaining data.
+///
+/// This function searches for the [`RECORD_SEPARATOR`] in the provided string.
+/// If found, it returns the part of the string up to and including the separator,
+/// along with any subsequent data as `RemainingData::Text`.
 fn split_text_handshake(text: &str) -> Result<(String, Option<RemainingData>), Error> {
     let separator_index = text
         .find(RECORD_SEPARATOR)
@@ -112,6 +127,11 @@ fn split_text_handshake(text: &str) -> Result<(String, Option<RemainingData>), E
     Ok((message_data, remaining))
 }
 
+/// Splits a binary buffer into the handshake message and any remaining data.
+///
+/// This function searches for the ASCII record separator (`0x1e`) in the provided byte slice.
+/// If found, it returns the part of the slice up to and including the separator (converted to UTF-8 string),
+/// along with any subsequent data as `RemainingData::Bytes`.
 fn split_binary_handshake(bytes: &[u8]) -> Result<(String, Option<RemainingData>), Error> {
     let separator_index = bytes
         .iter()
