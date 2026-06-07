@@ -38,9 +38,7 @@ impl NegotiateResponse {
 
     fn normalize(mut self) -> Self {
         if self.negotiate_version.unwrap_or(0) < 1 {
-            self.connection_token = self
-                .connection_token
-                .or_else(|| self.connection_id.clone());
+            self.connection_token = self.connection_token.or_else(|| self.connection_id.clone());
         }
         self
     }
@@ -101,8 +99,13 @@ pub async fn negotiate_with_client(
     let mut stored_access_token = access_token.take().map(str::to_owned);
 
     loop {
-        let response =
-            negotiate_once(&current_url, options, client, stored_access_token.as_deref()).await?;
+        let response = negotiate_once(
+            &current_url,
+            options,
+            client,
+            stored_access_token.as_deref(),
+        )
+        .await?;
 
         if let Some(error) = &response.error {
             return Err(Error::Negotiate(error.clone()));
@@ -123,7 +126,9 @@ pub async fn negotiate_with_client(
 
         if is_final {
             if redirects >= MAX_NEGOTIATE_REDIRECTS && redirect_url.is_some() {
-                return Err(Error::Negotiate("negotiate redirection limit exceeded".into()));
+                return Err(Error::Negotiate(
+                    "negotiate redirection limit exceeded".into(),
+                ));
             }
 
             return Ok(NegotiateResult {

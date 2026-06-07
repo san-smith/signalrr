@@ -38,7 +38,9 @@ pub fn parse_message(data: &[Value]) -> Result<Option<HubMessage>, ProtocolError
     Ok(Some(message))
 }
 
-pub(crate) fn create_message_headers(data: &[Value]) -> Result<HashMap<String, String>, ProtocolError> {
+pub(crate) fn create_message_headers(
+    data: &[Value],
+) -> Result<HashMap<String, String>, ProtocolError> {
     if data.len() < 2 {
         return Err(ProtocolError::InvalidPayload("invalid headers".into()));
     }
@@ -47,12 +49,7 @@ pub(crate) fn create_message_headers(data: &[Value]) -> Result<HashMap<String, S
         Value::Nil => Ok(HashMap::new()),
         Value::Map(map) => map
             .iter()
-            .map(|(key, value)| {
-                Ok((
-                    value_to_string(key)?,
-                    value_to_string(value)?,
-                ))
-            })
+            .map(|(key, value)| Ok((value_to_string(key)?, value_to_string(value)?)))
             .collect(),
         _ => Err(ProtocolError::InvalidPayload("invalid headers".into())),
     }
@@ -215,7 +212,10 @@ mod tests {
 
     #[test]
     fn create_message_headers_parses_empty_and_non_empty() {
-        assert_eq!(create_message_headers(&[Value::from(1), Value::Nil]).unwrap(), HashMap::new());
+        assert_eq!(
+            create_message_headers(&[Value::from(1), Value::Nil]).unwrap(),
+            HashMap::new()
+        );
         assert_eq!(
             create_message_headers(&[
                 Value::from(1),

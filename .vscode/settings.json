@@ -17,8 +17,12 @@
         "files.insertFinalNewline": true,
     },
     "cSpell.words": [
+        "acked",
+        "backpressure",
+        "keepalive",
         "messagepack",
         "msgpack",
+        "oneshot",
         "reqwest",
         "rmpv",
         "serde",

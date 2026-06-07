@@ -71,9 +71,7 @@ impl HubMessage {
         let message_type = MessageType::from_i32(obj.get("type")?.as_i64()? as i32)?;
 
         match message_type {
-            MessageType::Invocation => {
-                Some(Self::Invocation(InvocationMessage::from_json(obj)?))
-            }
+            MessageType::Invocation => Some(Self::Invocation(InvocationMessage::from_json(obj)?)),
             MessageType::StreamInvocation => Some(Self::StreamInvocation(
                 StreamInvocationMessage::from_json(obj)?,
             )),
@@ -376,7 +374,11 @@ fn parse_optional_string_list(value: Option<&Value>) -> Option<Vec<String>> {
     })
 }
 
-fn insert_optional_map(map: &mut serde_json::Map<String, Value>, key: &str, value: &HashMap<String, String>) {
+fn insert_optional_map(
+    map: &mut serde_json::Map<String, Value>,
+    key: &str,
+    value: &HashMap<String, String>,
+) {
     if !value.is_empty() {
         map.insert(
             key.into(),
@@ -390,23 +392,25 @@ fn insert_optional_map(map: &mut serde_json::Map<String, Value>, key: &str, valu
     }
 }
 
-fn insert_optional_string(map: &mut serde_json::Map<String, Value>, key: &str, value: Option<&str>) {
+fn insert_optional_string(
+    map: &mut serde_json::Map<String, Value>,
+    key: &str,
+    value: Option<&str>,
+) {
     if let Some(value) = value {
         map.insert(key.into(), Value::String(value.to_string()));
     }
 }
 
-fn insert_optional_string_list(map: &mut serde_json::Map<String, Value>, key: &str, value: Option<&[String]>) {
+fn insert_optional_string_list(
+    map: &mut serde_json::Map<String, Value>,
+    key: &str,
+    value: Option<&[String]>,
+) {
     if let Some(value) = value.filter(|value| !value.is_empty()) {
         map.insert(
             key.into(),
-            Value::Array(
-                value
-                    .iter()
-                    .cloned()
-                    .map(Value::String)
-                    .collect(),
-            ),
+            Value::Array(value.iter().cloned().map(Value::String).collect()),
         );
     }
 }

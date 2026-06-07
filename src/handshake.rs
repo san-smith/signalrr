@@ -201,18 +201,15 @@ mod tests {
 
         assert_eq!(result.response.error.as_deref(), Some("error"));
         assert_eq!(result.response.minor_version, Some(1));
-        assert_eq!(
-            result.remaining,
-            Some(RemainingData::Text("lol".into()))
-        );
+        assert_eq!(result.remaining, Some(RemainingData::Text("lol".into())));
     }
 
     #[test]
     fn parse_binary_response_with_remaining_data() {
         let input = vec![
-            b'{', b'"', b'e', b'r', b'r', b'o', b'r', b'"', b':', b'"', b'e', b'r', b'r',
-            b'o', b'r', b'"', b',', b'"', b'm', b'i', b'n', b'o', b'r', b'V', b'e', b'r',
-            b's', b'i', b'o', b'n', b'"', b':', b'1', b'}', 0x1e, b'l', b'o', b'l',
+            b'{', b'"', b'e', b'r', b'r', b'o', b'r', b'"', b':', b'"', b'e', b'r', b'r', b'o',
+            b'r', b'"', b',', b'"', b'm', b'i', b'n', b'o', b'r', b'V', b'e', b'r', b's', b'i',
+            b'o', b'n', b'"', b':', b'1', b'}', 0x1e, b'l', b'o', b'l',
         ];
         let result = HandshakeProtocol
             .parse_response(HandshakeInput::Binary(&input))

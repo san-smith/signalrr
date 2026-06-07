@@ -36,7 +36,8 @@ pub trait HubProtocol: Send + Sync {
     fn name(&self) -> &str;
     fn version(&self) -> i32;
     fn transfer_format(&self) -> TransferFormat;
-    fn parse_messages(&self, input: HubProtocolInput<'_>) -> Result<Vec<HubMessage>, ProtocolError>;
+    fn parse_messages(&self, input: HubProtocolInput<'_>)
+    -> Result<Vec<HubMessage>, ProtocolError>;
     fn write_message(&self, message: &HubMessage) -> Result<Vec<u8>, ProtocolError>;
 }
 

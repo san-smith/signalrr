@@ -22,7 +22,10 @@ impl HubProtocol for JsonProtocol {
         TransferFormat::Text
     }
 
-    fn parse_messages(&self, input: HubProtocolInput<'_>) -> Result<Vec<HubMessage>, ProtocolError> {
+    fn parse_messages(
+        &self,
+        input: HubProtocolInput<'_>,
+    ) -> Result<Vec<HubMessage>, ProtocolError> {
         let HubProtocolInput::Text(text) = input else {
             return Err(ProtocolError::InvalidInput(
                 "invalid input for JSON hub protocol; expected text".into(),
@@ -104,7 +107,9 @@ mod tests {
 
         let encoded = JsonProtocol.write_message(&original).unwrap();
         let decoded = JsonProtocol
-            .parse_messages(HubProtocolInput::Text(std::str::from_utf8(&encoded).unwrap()))
+            .parse_messages(HubProtocolInput::Text(
+                std::str::from_utf8(&encoded).unwrap(),
+            ))
             .unwrap();
 
         assert_eq!(decoded, vec![original]);

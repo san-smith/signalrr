@@ -50,7 +50,10 @@ impl HubProtocol for MessagePackBrotliProtocol {
         TransferFormat::Binary
     }
 
-    fn parse_messages(&self, input: HubProtocolInput<'_>) -> Result<Vec<HubMessage>, ProtocolError> {
+    fn parse_messages(
+        &self,
+        input: HubProtocolInput<'_>,
+    ) -> Result<Vec<HubMessage>, ProtocolError> {
         let HubProtocolInput::Binary(bytes) = input else {
             return Err(ProtocolError::InvalidInput(
                 "invalid input for MessagePack+Brotli hub protocol; expected binary".into(),
@@ -72,9 +75,12 @@ impl HubProtocol for MessagePackBrotliProtocol {
                 ));
             }
 
-            let unpacked: Value = rmpv::decode::read_value(&mut frame.as_slice()).map_err(|error| {
-                ProtocolError::MessagePack(format!("failed to decode messagepack payload: {error}"))
-            })?;
+            let unpacked: Value =
+                rmpv::decode::read_value(&mut frame.as_slice()).map_err(|error| {
+                    ProtocolError::MessagePack(format!(
+                        "failed to decode messagepack payload: {error}"
+                    ))
+                })?;
 
             let Value::Array(items) = unpacked else {
                 return Err(ProtocolError::InvalidPayload("invalid payload".into()));

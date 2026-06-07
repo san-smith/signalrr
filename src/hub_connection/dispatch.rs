@@ -7,11 +7,10 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use tracing::warn;
 
-use crate::bus::{MessageBus, INVOCATION_CANCELED_MESSAGE};
+use crate::bus::{INVOCATION_CANCELED_MESSAGE, MessageBus};
 use crate::error::Error;
 use crate::hub::message::{
-    CloseMessage, CompletionMessage, HubMessage, InvocationMessage,
-    StreamItemMessage,
+    CloseMessage, CompletionMessage, HubMessage, InvocationMessage, StreamItemMessage,
 };
 use crate::hub::protocol::HubProtocol;
 use crate::hub_connection::message_buffer::MessageBuffer;
@@ -201,16 +200,13 @@ impl DispatchContext {
             .unwrap_or_else(|| INVOCATION_CANCELED_MESSAGE.to_string());
         self.bus.cancel_all_pending(cancellation).await;
 
-        if !self
-            .transport_close_signaled
-            .swap(true, Ordering::Relaxed)
-        {
-            let _ = self.transport_events.send(TransportEvent::Closed(
-                TransportCloseInfo {
+        if !self.transport_close_signaled.swap(true, Ordering::Relaxed) {
+            let _ = self
+                .transport_events
+                .send(TransportEvent::Closed(TransportCloseInfo {
                     error,
                     allow_reconnect: message.allow_reconnect,
-                },
-            ));
+                }));
         }
 
         self.transport.close().await
@@ -299,10 +295,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(invoke.await.unwrap(), Err("server shutdown".into()));
-        assert_eq!(
-            stream.next().await,
-            Some(Err("server shutdown".into()))
-        );
+        assert_eq!(stream.next().await, Some(Err("server shutdown".into())));
 
         let TransportEvent::Closed(info) = events_rx.try_recv().unwrap();
         assert_eq!(info.error.as_deref(), Some("server shutdown"));

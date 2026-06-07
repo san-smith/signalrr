@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use futures_channel::oneshot;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinHandle;
 use tracing::warn;
 
@@ -177,7 +177,10 @@ async fn flush_buffer(
     };
 
     if let Err(error) = &result {
-        warn!(?error, "transport send queue failed to flush buffered payloads");
+        warn!(
+            ?error,
+            "transport send queue failed to flush buffered payloads"
+        );
     }
 
     result

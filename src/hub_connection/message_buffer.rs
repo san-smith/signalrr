@@ -286,10 +286,8 @@ async fn send_serialized(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hub::message::{
-        CompletionMessage, InvocationMessage, PingMessage, SequenceMessage,
-    };
     use crate::hub::MessagePackProtocol;
+    use crate::hub::message::{CompletionMessage, InvocationMessage, PingMessage, SequenceMessage};
 
     #[test]
     fn is_invocation_message_classifies_message_types() {

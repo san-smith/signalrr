@@ -31,7 +31,7 @@ pub use stream::HubMethodStream;
 pub use upload_stream::{ClientUploadStream, HubArgument};
 
 use crate::access_token::AccessTokenFactory;
-use crate::bus::{ClientHandlerId, ClientMethodOutput, MessageBus, INVOCATION_CANCELED_MESSAGE};
+use crate::bus::{ClientHandlerId, ClientMethodOutput, INVOCATION_CANCELED_MESSAGE, MessageBus};
 use crate::connection::{Connection, ConnectionOptions};
 use crate::error::Error;
 use crate::handshake::{HandshakeRequest, RemainingData};
@@ -182,18 +182,14 @@ impl HubConnection {
 
         if self.closing.load(Ordering::Relaxed) {
             *self.state.write().await = HubConnectionState::Disconnected;
-            return Err(Error::Aborted(
-                "connection stopped during start".into(),
-            ));
+            return Err(Error::Aborted("connection stopped during start".into()));
         }
 
         match self.connect_runtime(false).await {
             Ok(events_rx) => {
                 if self.closing.load(Ordering::Relaxed) {
                     self.shutdown_active_connection(None).await?;
-                    return Err(Error::Aborted(
-                        "connection stopped during start".into(),
-                    ));
+                    return Err(Error::Aborted("connection stopped during start".into()));
                 }
 
                 *self.state.write().await = HubConnectionState::Connected;
@@ -297,17 +293,11 @@ impl HubConnection {
 
     /// Removes all handlers registered for the given hub method name.
     pub async fn off(&self, method_name: impl AsRef<str>) {
-        self.bus
-            .remove_handler(method_name.as_ref(), None)
-            .await;
+        self.bus.remove_handler(method_name.as_ref(), None).await;
     }
 
     /// Removes a single handler previously registered with [`Self::on`] or [`Self::on_async`].
-    pub async fn off_handler(
-        &self,
-        method_name: impl AsRef<str>,
-        handler_id: ClientHandlerId,
-    ) {
+    pub async fn off_handler(&self, method_name: impl AsRef<str>, handler_id: ClientHandlerId) {
         self.bus
             .remove_handler(method_name.as_ref(), Some(handler_id))
             .await;
@@ -348,18 +338,14 @@ impl HubConnection {
             stream_ids,
         });
 
-        launch_upload_streams(
-            runtime.clone(),
-            streams,
-            async move {
-                let active_runtime = runtime.read().await;
-                active_runtime
-                    .as_ref()
-                    .ok_or(Error::NotConnected)?
-                    .send(&message)
-                    .await
-            },
-        );
+        launch_upload_streams(runtime.clone(), streams, async move {
+            let active_runtime = runtime.read().await;
+            active_runtime
+                .as_ref()
+                .ok_or(Error::NotConnected)?
+                .send(&message)
+                .await
+        });
 
         match response.await? {
             Ok(value) => Ok(value),
@@ -408,18 +394,14 @@ impl HubConnection {
             stream_ids,
         });
 
-        launch_upload_streams(
-            runtime.clone(),
-            streams,
-            async move {
-                let active_runtime = runtime.read().await;
-                active_runtime
-                    .as_ref()
-                    .ok_or(Error::NotConnected)?
-                    .send(&message)
-                    .await
-            },
-        );
+        launch_upload_streams(runtime.clone(), streams, async move {
+            let active_runtime = runtime.read().await;
+            active_runtime
+                .as_ref()
+                .ok_or(Error::NotConnected)?
+                .send(&message)
+                .await
+        });
 
         Ok(stream)
     }
@@ -465,18 +447,14 @@ impl HubConnection {
             stream_ids,
         });
 
-        launch_upload_streams(
-            runtime.clone(),
-            streams,
-            async move {
-                let active_runtime = runtime.read().await;
-                active_runtime
-                    .as_ref()
-                    .ok_or(Error::NotConnected)?
-                    .send(&message)
-                    .await
-            },
-        );
+        launch_upload_streams(runtime.clone(), streams, async move {
+            let active_runtime = runtime.read().await;
+            active_runtime
+                .as_ref()
+                .ok_or(Error::NotConnected)?
+                .send(&message)
+                .await
+        });
 
         Ok(())
     }
@@ -487,9 +465,8 @@ impl HubConnection {
     ) -> Result<mpsc::UnboundedReceiver<TransportEvent>, Error> {
         let mut connection = Connection::connect(self.options.clone()).await?;
         *self.connection_id.write().await = connection.connection_id().map(str::to_string);
-        *self.remaining_handshake_data.write().await = connection
-            .remaining_handshake_data()
-            .cloned();
+        *self.remaining_handshake_data.write().await =
+            connection.remaining_handshake_data().cloned();
         *self.initial_messages.write().await = connection.initial_messages().to_vec();
 
         let transport = connection.transport();

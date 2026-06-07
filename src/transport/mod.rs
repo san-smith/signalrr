@@ -23,9 +23,7 @@ pub(crate) fn append_access_token(url: &str, access_token: Option<&str>) -> Resu
     };
 
     let mut parsed = url::Url::parse(url)?;
-    parsed
-        .query_pairs_mut()
-        .append_pair("access_token", token);
+    parsed.query_pairs_mut().append_pair("access_token", token);
     Ok(parsed.to_string())
 }
 

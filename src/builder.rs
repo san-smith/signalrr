@@ -5,14 +5,14 @@ use std::time::Duration;
 
 use crate::access_token::{AccessTokenFactory, factory as access_token_factory};
 use crate::handshake::HandshakeRequest;
-use crate::hub::protocol::HubProtocol;
-use crate::hub::{JsonProtocol, MessagePackProtocol};
 #[cfg(feature = "messagepack-brotli")]
 use crate::hub::MessagePackBrotliProtocol;
+use crate::hub::protocol::HubProtocol;
+use crate::hub::{JsonProtocol, MessagePackProtocol};
 use crate::hub_connection::runtime::{DEFAULT_KEEP_ALIVE_INTERVAL, DEFAULT_SERVER_TIMEOUT};
 use crate::hub_connection::{
-    DefaultReconnectPolicy, HubConnection, HubConnectionConfig, RetryPolicy,
-    DEFAULT_STATEFUL_RECONNECT_BUFFER_SIZE,
+    DEFAULT_STATEFUL_RECONNECT_BUFFER_SIZE, DefaultReconnectPolicy, HubConnection,
+    HubConnectionConfig, RetryPolicy,
 };
 use crate::negotiate::NegotiateOptions;
 use crate::transport::TransferFormat;

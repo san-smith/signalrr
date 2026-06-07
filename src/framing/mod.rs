@@ -4,4 +4,4 @@ mod binary;
 mod text;
 
 pub use binary::BinaryMessageFormat;
-pub use text::{TextMessageFormat, RECORD_SEPARATOR};
+pub use text::{RECORD_SEPARATOR, TextMessageFormat};

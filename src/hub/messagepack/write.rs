@@ -33,7 +33,9 @@ pub fn write_ping() -> Result<Vec<u8>, ProtocolError> {
     pack_payload(&[Value::from(MessageType::Ping as i32)])
 }
 
-pub fn write_cancel_invocation(message: &CancelInvocationMessage) -> Result<Vec<u8>, ProtocolError> {
+pub fn write_cancel_invocation(
+    message: &CancelInvocationMessage,
+) -> Result<Vec<u8>, ProtocolError> {
     pack_payload(&[
         Value::from(MessageType::CancelInvocation as i32),
         headers_value(&message.headers),
@@ -58,9 +60,12 @@ pub fn write_completion(message: &CompletionMessage) -> Result<Vec<u8>, Protocol
     ];
 
     match result_kind {
-        ERROR_RESULT => payload.push(json_to_value(message.error.as_ref().map(|value| {
-            serde_json::Value::String(value.clone())
-        }))),
+        ERROR_RESULT => payload.push(json_to_value(
+            message
+                .error
+                .as_ref()
+                .map(|value| serde_json::Value::String(value.clone())),
+        )),
         NON_VOID_RESULT => payload.push(json_to_value(message.result.clone())),
         _ => {}
     }
@@ -77,7 +82,9 @@ pub fn write_stream_item(message: &StreamItemMessage) -> Result<Vec<u8>, Protoco
     ])
 }
 
-pub fn write_stream_invocation(message: &StreamInvocationMessage) -> Result<Vec<u8>, ProtocolError> {
+pub fn write_stream_invocation(
+    message: &StreamInvocationMessage,
+) -> Result<Vec<u8>, ProtocolError> {
     let mut payload = vec![
         Value::from(MessageType::StreamInvocation as i32),
         headers_value(&message.headers),
@@ -179,7 +186,12 @@ pub(crate) fn optional_string_value(value: Option<&str>) -> Value {
 }
 
 pub(crate) fn json_array_value(values: &[serde_json::Value]) -> Value {
-    Value::Array(values.iter().map(|value| json_to_value(Some(value.clone()))).collect())
+    Value::Array(
+        values
+            .iter()
+            .map(|value| json_to_value(Some(value.clone())))
+            .collect(),
+    )
 }
 
 pub(crate) fn json_to_value(value: Option<serde_json::Value>) -> Value {
@@ -196,9 +208,12 @@ pub(crate) fn json_to_value(value: Option<serde_json::Value>) -> Value {
             }
         }
         Some(serde_json::Value::String(value)) => Value::String(value.into()),
-        Some(serde_json::Value::Array(values)) => {
-            Value::Array(values.into_iter().map(|value| json_to_value(Some(value))).collect())
-        }
+        Some(serde_json::Value::Array(values)) => Value::Array(
+            values
+                .into_iter()
+                .map(|value| json_to_value(Some(value)))
+                .collect(),
+        ),
         Some(serde_json::Value::Object(values)) => Value::Map(
             values
                 .into_iter()
@@ -296,7 +311,10 @@ mod tests {
 
     #[test]
     fn write_ack_matches_dart_fixture() {
-        assert_eq!(write_ack(AckMessage { sequence_id: 1 }).unwrap(), vec![3, 146, 8, 1]);
+        assert_eq!(
+            write_ack(AckMessage { sequence_id: 1 }).unwrap(),
+            vec![3, 146, 8, 1]
+        );
     }
 
     #[test]

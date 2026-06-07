@@ -7,8 +7,8 @@ use crate::hub::message::{
     StreamItemMessage,
 };
 use crate::hub::messagepack::write::{
-    headers_value, json_array_value, json_to_value, optional_string_value, pack_payload,
-    write_ack, write_cancel_invocation, write_close, write_ping, write_sequence,
+    headers_value, json_array_value, json_to_value, optional_string_value, pack_payload, write_ack,
+    write_cancel_invocation, write_close, write_ping, write_sequence,
 };
 use crate::hub::protocol::ProtocolError;
 
@@ -109,9 +109,12 @@ pub fn write_completion_brotli(message: &CompletionMessage) -> Result<Vec<u8>, P
     match result_kind {
         ERROR_RESULT => {
             payload.push(Value::from(0));
-            payload.push(json_to_value(message.error.as_ref().map(|value| {
-                serde_json::Value::String(value.clone())
-            })));
+            payload.push(json_to_value(
+                message
+                    .error
+                    .as_ref()
+                    .map(|value| serde_json::Value::String(value.clone())),
+            ));
         }
         NON_VOID_RESULT => {
             payload.push(Value::from(0));
@@ -271,9 +274,6 @@ mod tests {
             .unwrap()
             .expect("completion message");
 
-        assert_eq!(
-            decoded,
-            HubMessage::Completion(message),
-        );
+        assert_eq!(decoded, HubMessage::Completion(message),);
     }
 }

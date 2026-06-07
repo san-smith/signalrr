@@ -37,9 +37,9 @@ pub fn parse_message(
         MessageType::Invocation => {
             HubMessage::Invocation(create_invocation_message(data, decoder)?)
         }
-        MessageType::StreamInvocation => HubMessage::StreamInvocation(
-            create_stream_invocation_message(data, decoder)?,
-        ),
+        MessageType::StreamInvocation => {
+            HubMessage::StreamInvocation(create_stream_invocation_message(data, decoder)?)
+        }
         MessageType::StreamItem => {
             HubMessage::StreamItem(create_stream_item_message(data, decoder)?)
         }
@@ -336,10 +336,7 @@ mod tests {
         };
 
         let result = unpack_data(Some(&Value::Binary(compressed)), true, &decoder()).unwrap();
-        assert_eq!(
-            result,
-            Some(Value::String("hello world".into()))
-        );
+        assert_eq!(result, Some(Value::String("hello world".into())));
     }
 
     #[test]
@@ -380,6 +377,10 @@ mod tests {
             .unwrap(),
             Some(HubMessage::Ack(AckMessage { sequence_id: 1 }))
         ));
-        assert!(parse_message(&[Value::from(99)], &decoder).unwrap().is_none());
+        assert!(
+            parse_message(&[Value::from(99)], &decoder)
+                .unwrap()
+                .is_none()
+        );
     }
 }

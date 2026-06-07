@@ -7,9 +7,8 @@ use std::sync::Arc;
 use crate::error::Error;
 
 /// Async factory that supplies bearer tokens for authenticated connections.
-pub type AccessTokenFactory = Arc<
-    dyn Fn() -> Pin<Box<dyn Future<Output = Result<String, Error>> + Send>> + Send + Sync,
->;
+pub type AccessTokenFactory =
+    Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<String, Error>> + Send>> + Send + Sync>;
 
 /// Wraps an async closure as an [`AccessTokenFactory`].
 pub fn factory<F, Fut>(callback: F) -> AccessTokenFactory
