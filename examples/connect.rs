@@ -7,7 +7,7 @@ use signalrr::HubConnection;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let url = std::env::var("SIGNALR_URL").expect("SIGNALR_URL must be set");
+    let url = std::env::var("SIGNALR_URL").map_err(|_| "SIGNALR_URL must be set")?;
     let token = std::env::var("ACCESS_TOKEN").unwrap_or_default();
 
     let connection = HubConnection::builder(url)

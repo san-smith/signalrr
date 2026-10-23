@@ -90,11 +90,11 @@ impl MessageBuffer {
             });
         }
 
-        if !self.reconnect_in_progress.load(Ordering::Relaxed) {
-            if let Err(error) = send_serialized(transport, transfer_format, &serialized).await {
-                self.disconnected();
-                return Err(error);
-            }
+        if !self.reconnect_in_progress.load(Ordering::Relaxed)
+            && let Err(error) = send_serialized(transport, transfer_format, &serialized).await
+        {
+            self.disconnected();
+            return Err(error);
         }
 
         if let Some(rx) = backpressure_rx {

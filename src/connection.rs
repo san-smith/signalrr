@@ -91,12 +91,12 @@ impl Connection {
             response,
             access_token: negotiate_access_token,
         } = {
-            let client = options.http_client.clone().unwrap_or_else(|| {
-                Client::builder()
+            let client = match options.http_client.clone() {
+                Some(client) => client,
+                None => Client::builder()
                     .timeout(options.negotiate.timeout)
-                    .build()
-                    .expect("default HTTP client should build")
-            });
+                    .build()?,
+            };
             negotiate_with_client(
                 &options.base_url,
                 &options.negotiate,

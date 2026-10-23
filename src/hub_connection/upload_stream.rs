@@ -68,18 +68,21 @@ impl ClientUploadStream {
         Self::from_stream(stream.map(Ok))
     }
 
-    /// Creates a stream from an iterator of JSON values.
-    pub fn from_iter<I>(items: I) -> Self
-    where
-        I: IntoIterator<Item = Value>,
-        I::IntoIter: Send + 'static,
-    {
-        Self::from_values(futures_util::stream::iter(items))
-    }
-
     /// Creates a stream backed by an unbounded channel receiver.
     pub fn from_receiver(receiver: mpsc::UnboundedReceiver<Value>) -> Self {
         Self::from_values(ReceiverStream(receiver))
+    }
+}
+
+/// Creates a stream from JSON values.
+///
+/// The values are collected up front, so the iterator does not have to be `Send` or
+/// `'static`. For lazy or unbounded sources use [`ClientUploadStream::from_values`] or
+/// [`ClientUploadStream::from_receiver`].
+impl FromIterator<Value> for ClientUploadStream {
+    fn from_iter<I: IntoIterator<Item = Value>>(items: I) -> Self {
+        let items: Vec<Value> = items.into_iter().collect();
+        Self::from_values(futures_util::stream::iter(items))
     }
 }
 

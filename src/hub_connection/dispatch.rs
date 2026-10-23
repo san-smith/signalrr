@@ -30,13 +30,12 @@ pub struct DispatchContext {
 
 impl DispatchContext {
     pub async fn dispatch(&self, message: HubMessage) -> Result<(), Error> {
-        if let Some(buffer) = &self.message_buffer {
-            if !buffer
+        if let Some(buffer) = &self.message_buffer
+            && !buffer
                 .should_process_message(&message, &self.transport, self.transfer_format)
                 .await
-            {
-                return Ok(());
-            }
+        {
+            return Ok(());
         }
 
         match message {

@@ -29,12 +29,10 @@ pub fn resolve_handshake_version(
     hub_protocol_version: i32,
     override_version: Option<i32>,
 ) -> i32 {
-    override_version.unwrap_or_else(|| {
-        if use_stateful_reconnect {
-            hub_protocol_version
-        } else {
-            LEGACY_HANDSHAKE_VERSION
-        }
+    override_version.unwrap_or(if use_stateful_reconnect {
+        hub_protocol_version
+    } else {
+        LEGACY_HANDSHAKE_VERSION
     })
 }
 

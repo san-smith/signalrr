@@ -121,23 +121,20 @@ pub async fn negotiate_with_client(
             stored_access_token = Some(token.clone());
         }
 
-        let redirect_url = response.url.clone();
-        let is_final = redirect_url.is_none() || redirects >= MAX_NEGOTIATE_REDIRECTS;
-
-        if is_final {
-            if redirects >= MAX_NEGOTIATE_REDIRECTS && redirect_url.is_some() {
-                return Err(Error::Negotiate(
-                    "negotiate redirection limit exceeded".into(),
-                ));
-            }
-
+        let Some(redirect_url) = response.url.clone() else {
             return Ok(NegotiateResult {
                 response,
                 access_token: stored_access_token,
             });
+        };
+
+        if redirects >= MAX_NEGOTIATE_REDIRECTS {
+            return Err(Error::Negotiate(
+                "negotiate redirection limit exceeded".into(),
+            ));
         }
 
-        current_url = redirect_url.unwrap();
+        current_url = redirect_url;
         redirects += 1;
     }
 }

@@ -30,6 +30,10 @@ futures-channel = "0.3"
 tracing = "0.1"
 brotli = { version = "5.0", optional = true }
 
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+
 [dev-dependencies]
 tokio = { version = "1.48", features = ["rt-multi-thread", "macros"] }
 base64 = "0.22"

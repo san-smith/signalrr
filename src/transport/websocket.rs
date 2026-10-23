@@ -29,18 +29,12 @@ pub enum TransportMessage {
     Closed(Option<String>),
 }
 
+type WebSocketSink =
+    futures_util::stream::SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
+
 #[derive(Clone)]
 struct WebSocketTransportInner {
-    sender: Option<
-        Arc<
-            Mutex<
-                futures_util::stream::SplitSink<
-                    WebSocketStream<MaybeTlsStream<TcpStream>>,
-                    Message,
-                >,
-            >,
-        >,
-    >,
+    sender: Option<Arc<Mutex<WebSocketSink>>>,
     read_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     closed: Arc<Mutex<bool>>,
     log_message_content: bool,
