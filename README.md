@@ -12,7 +12,9 @@ Implemented:
 
 - text/binary message framing
 - JSON handshake
-- HTTP negotiate with redirects and `connectionToken`
+- HTTP negotiate with redirects and `connectionToken`; on `401` a fresh token is requested
+  from the access token factory and the request is retried once (`Error::Unauthorized`
+  otherwise)
 - WebSocket transport
 - `HubConnection::start()` / `close()` lifecycle
 - hub message model (`HubMessage`, invocation/completion/ping/…)

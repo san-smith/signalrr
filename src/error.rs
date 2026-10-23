@@ -16,6 +16,11 @@ pub enum Error {
     #[error("negotiate failed: {0}")]
     Negotiate(String),
 
+    /// The server rejected the access token (`401 Unauthorized`), also after a fresh token
+    /// from the [`crate::AccessTokenFactory`] when one is configured.
+    #[error("unauthorized: {0}")]
+    Unauthorized(String),
+
     #[error("handshake failed: {0}")]
     Handshake(String),
 

@@ -18,3 +18,13 @@ where
 {
     Arc::new(move || Box::pin(callback()))
 }
+
+/// Calls `factory` and maps an empty token to `None`.
+pub(crate) async fn resolve(factory: Option<&AccessTokenFactory>) -> Result<Option<String>, Error> {
+    let Some(factory) = factory else {
+        return Ok(None);
+    };
+
+    let token = factory().await?;
+    Ok((!token.is_empty()).then_some(token))
+}

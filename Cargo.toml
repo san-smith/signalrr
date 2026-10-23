@@ -37,6 +37,7 @@ expect_used = "deny"
 [dev-dependencies]
 tokio = { version = "1.48", features = ["rt-multi-thread", "macros"] }
 base64 = "0.22"
+wiremock = "0.6"
 
 [[example]]
 name = "connect"

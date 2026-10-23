@@ -19,7 +19,7 @@ use crate::hub_connection::DEFAULT_STATEFUL_RECONNECT_BUFFER_SIZE;
 use crate::hub_connection::retry::RetryPolicy;
 use crate::hub_connection::runtime::{DEFAULT_KEEP_ALIVE_INTERVAL, DEFAULT_SERVER_TIMEOUT};
 use crate::negotiate::{
-    NegotiateOptions, NegotiateResult, build_websocket_url, negotiate_with_client,
+    NegotiateOptions, NegotiateResult, build_websocket_url, negotiate_with_token_factory,
 };
 use crate::transport::{
     TransferFormat, TransportMessage, WebSocketConnectOptions, WebSocketTransport,
@@ -86,11 +86,9 @@ pub struct Connection {
 impl Connection {
     /// Negotiates, opens the WebSocket, and completes the SignalR handshake.
     pub async fn connect(options: ConnectionOptions) -> Result<Self, Error> {
-        let access_token = resolve_access_token(options.access_token_factory.as_ref()).await?;
-
         let NegotiateResult {
             response,
-            access_token: negotiate_access_token,
+            access_token,
         } = {
             let client = match options.http_client.clone() {
                 Some(client) => client,
@@ -98,28 +96,27 @@ impl Connection {
                     .timeout(options.negotiate.timeout)
                     .build()?,
             };
-            negotiate_with_client(
+            negotiate_with_token_factory(
                 &options.base_url,
                 &options.negotiate,
                 &client,
-                access_token.as_deref(),
+                options.access_token_factory.as_ref(),
             )
             .await?
         };
 
-        let effective_access_token = negotiate_access_token.or(access_token);
         let connection_token = response.websocket_token()?.to_string();
         let connection_id = response.connection_id.clone();
         let websocket_url = build_websocket_url(
             &options.base_url,
             &connection_token,
-            effective_access_token.as_deref(),
+            access_token.as_deref(),
         )?;
 
         debug!(url = %websocket_url, "starting websocket transport");
         let (mut transport, mut incoming) = WebSocketTransport::connect_with_options(
             &websocket_url,
-            effective_access_token.as_deref(),
+            access_token.as_deref(),
             WebSocketConnectOptions {
                 log_message_content: options.log_message_content,
             },
@@ -227,21 +224,6 @@ fn parse_initial_messages(
     };
 
     protocol.parse_messages(input).map_err(Error::from)
-}
-
-async fn resolve_access_token(
-    factory: Option<&AccessTokenFactory>,
-) -> Result<Option<String>, Error> {
-    let Some(factory) = factory else {
-        return Ok(None);
-    };
-
-    let token = factory().await?;
-    if token.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(token))
-    }
 }
 
 fn parse_transport_handshake(message: TransportMessage) -> Result<HandshakeResult, Error> {

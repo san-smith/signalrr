@@ -60,6 +60,7 @@ pub use hub_connection::{
 };
 pub use negotiate::{
     NegotiateOptions, NegotiateResponse, NegotiateResult, negotiate, negotiate_with_client,
+    negotiate_with_token_factory,
 };
 pub use transport::{
     TransferFormat, TransportMessage, TransportSendQueue, WebSocketConnectOptions,
