@@ -757,9 +757,13 @@ mod tests {
     use super::*;
     use crate::connection::ConnectionOptions;
     use crate::error::Error;
-    use crate::hub::message::{CompletionMessage, PingMessage, StreamItemMessage};
+    use crate::hub::JsonProtocol;
+    #[cfg(feature = "messagepack")]
+    use crate::hub::MessagePackProtocol;
+    #[cfg(feature = "messagepack")]
+    use crate::hub::message::PingMessage;
+    use crate::hub::message::{CompletionMessage, StreamItemMessage};
     use crate::hub::protocol::HubProtocolInput;
-    use crate::hub::{JsonProtocol, MessagePackProtocol};
     use crate::hub_connection::dispatch::DispatchContext;
     use crate::transport::WebSocketTransport;
     use std::sync::Arc;
@@ -1065,6 +1069,7 @@ mod tests {
         assert_eq!(decoded, vec![original]);
     }
 
+    #[cfg(feature = "messagepack")]
     #[test]
     fn messagepack_protocol_round_trip_ping() {
         let original = HubMessage::Ping(PingMessage);

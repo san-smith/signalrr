@@ -90,11 +90,11 @@ async fn main() -> Result<(), signalrr::Error> {
 
 ## Development
 
+CI (GitHub Actions) runs rustfmt, clippy with `-D warnings` and the test suite on Linux, macOS
+and Windows, plus clippy and tests for each feature set. Run the same checks locally with:
+
 ```bash
-cargo test
-cargo test --features messagepack-brotli
-cargo fmt
-cargo clippy
+./ci.sh   # needs cargo-nextest: cargo install --locked cargo-nextest
 ```
 
 ## License

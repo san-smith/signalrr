@@ -49,18 +49,19 @@ pub struct ConnectionOptions {
 
 impl ConnectionOptions {
     pub fn new(base_url: impl Into<String>) -> Self {
+        let hub_protocol = crate::hub::default_hub_protocol();
         Self {
             base_url: base_url.into(),
             negotiate: NegotiateOptions::new(),
             handshake_request: HandshakeRequest {
-                protocol: "messagepack".into(),
-                version: 2,
+                protocol: hub_protocol.name().into(),
+                version: hub_protocol.version(),
             },
             handshake_version_override: None,
-            transfer_format: TransferFormat::Binary,
+            transfer_format: hub_protocol.transfer_format(),
             handshake_timeout: DEFAULT_HANDSHAKE_TIMEOUT,
             access_token_factory: None,
-            hub_protocol: Arc::new(crate::hub::MessagePackProtocol),
+            hub_protocol,
             server_timeout: DEFAULT_SERVER_TIMEOUT,
             keep_alive_interval: DEFAULT_KEEP_ALIVE_INTERVAL,
             reconnect_policy: None,

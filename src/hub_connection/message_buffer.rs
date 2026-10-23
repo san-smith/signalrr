@@ -286,8 +286,11 @@ async fn send_serialized(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "messagepack")]
     use crate::hub::MessagePackProtocol;
-    use crate::hub::message::{CompletionMessage, InvocationMessage, PingMessage, SequenceMessage};
+    #[cfg(feature = "messagepack")]
+    use crate::hub::message::SequenceMessage;
+    use crate::hub::message::{CompletionMessage, InvocationMessage, PingMessage};
 
     #[test]
     fn is_invocation_message_classifies_message_types() {
@@ -311,6 +314,7 @@ mod tests {
         assert!(!is_invocation_message(&HubMessage::Ping(PingMessage)));
     }
 
+    #[cfg(feature = "messagepack")]
     #[tokio::test]
     async fn ack_removes_acked_messages() {
         let buffer = MessageBuffer::new(Arc::new(MessagePackProtocol), 100);
@@ -335,6 +339,7 @@ mod tests {
         assert!(buffer.messages.lock().await.is_empty());
     }
 
+    #[cfg(feature = "messagepack")]
     #[tokio::test]
     async fn should_process_message_waits_for_sequence_after_disconnect() {
         let buffer = MessageBuffer::new(Arc::new(MessagePackProtocol), 100);

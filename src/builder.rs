@@ -7,8 +7,10 @@ use crate::access_token::{AccessTokenFactory, factory as access_token_factory};
 use crate::handshake::HandshakeRequest;
 #[cfg(feature = "messagepack-brotli")]
 use crate::hub::MessagePackBrotliProtocol;
+#[cfg(feature = "messagepack")]
+use crate::hub::MessagePackProtocol;
 use crate::hub::protocol::HubProtocol;
-use crate::hub::{JsonProtocol, MessagePackProtocol};
+use crate::hub::{JsonProtocol, default_hub_protocol};
 use crate::hub_connection::runtime::{DEFAULT_KEEP_ALIVE_INTERVAL, DEFAULT_SERVER_TIMEOUT};
 use crate::hub_connection::{
     DEFAULT_STATEFUL_RECONNECT_BUFFER_SIZE, DefaultReconnectPolicy, HubConnection,
@@ -26,19 +28,20 @@ pub struct HubConnectionBuilder {
 
 impl HubConnectionBuilder {
     pub fn new(url: impl Into<String>) -> Self {
+        let hub_protocol = default_hub_protocol();
         Self {
             config: HubConnectionConfig {
                 base_url: url.into(),
                 negotiate: NegotiateOptions::new(),
                 handshake_request: HandshakeRequest {
-                    protocol: "messagepack".into(),
-                    version: 2,
+                    protocol: hub_protocol.name().into(),
+                    version: hub_protocol.version(),
                 },
                 handshake_version_override: None,
-                transfer_format: TransferFormat::Binary,
+                transfer_format: hub_protocol.transfer_format(),
                 access_token_factory: None,
                 handshake_timeout: Duration::from_secs(15),
-                hub_protocol: Arc::new(MessagePackProtocol),
+                hub_protocol,
                 server_timeout: DEFAULT_SERVER_TIMEOUT,
                 keep_alive_interval: DEFAULT_KEEP_ALIVE_INTERVAL,
                 reconnect_policy: None,
@@ -96,6 +99,7 @@ impl HubConnectionBuilder {
         self.with_hub_protocol(Arc::new(JsonProtocol))
     }
 
+    #[cfg(feature = "messagepack")]
     pub fn with_messagepack_protocol(self) -> Self {
         self.with_hub_protocol(Arc::new(MessagePackProtocol))
     }

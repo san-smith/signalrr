@@ -6,9 +6,12 @@ The crate is developed, not rewritten.
 
 ## State (2026-10-23)
 
-- About 7.5k lines, edition 2024, builds clean on stable 1.92, no `unsafe`, two `unwrap`s
-  in production code.
-- 99 unit tests and 1 doc test pass with `--all-features`.
+- About 7.5k lines, edition 2024, builds clean on stable 1.92, no `unsafe`, no `unwrap` or
+  `expect` in library code (denied by clippy).
+- 99 unit tests and 1 doc test pass with `--all-features`; every feature set builds and
+  passes clippy on its own.
+- CI on GitHub Actions: rustfmt, clippy and tests on Linux, macOS and Windows; `./ci.sh` runs
+  the same checks locally.
 - Protocol coverage: negotiate with redirects, JSON and MessagePack v2, `messagepack+brotli`
   (compression flag at position 4, payload at 5), automatic and stateful reconnect with
   buffering and `Ack`/`Sequence`, streaming both ways, keep-alive, handshake version
@@ -19,10 +22,8 @@ The crate is developed, not rewritten.
 
 ## Next
 
-1. **Clippy and CI.** `cargo clippy --all-targets -- -D warnings` reports 5 errors: two
-   `collapsible_if`, `unnecessary_lazy_evaluations`, `type_complexity`,
-   `should_implement_trait` on `ClientUploadStream::from_iter`. Fix them, add CI: fmt,
-   clippy, nextest.
+1. ~~**Clippy and CI.**~~ Done 2026-10-23: clippy is clean, CI runs fmt, clippy and tests,
+   the `json`-only build is fixed.
 2. **Smoke test against a real hub** with `messagepack+brotli`: connect, invoke a method,
    subscribe, receive a large snapshot. Save the raw frames as fixtures for `insta`
    snapshot tests. The test is opt-in (ignored by default, endpoint from an environment

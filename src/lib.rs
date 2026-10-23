@@ -43,10 +43,12 @@ pub use handshake::{
     HandshakeInput, HandshakeProtocol, HandshakeRequest, HandshakeResponse, HandshakeResult,
     LEGACY_HANDSHAKE_VERSION, RemainingData, resolve_handshake_version,
 };
+#[cfg(feature = "messagepack")]
+pub use hub::MessagePackProtocol;
 pub use hub::{
     AckMessage, CancelInvocationMessage, CloseMessage, CompletionMessage, HubMessage, HubProtocol,
-    HubProtocolInput, InvocationMessage, JsonProtocol, MessagePackProtocol, MessageType,
-    PingMessage, ProtocolError, SequenceMessage, StreamInvocationMessage, StreamItemMessage,
+    HubProtocolInput, InvocationMessage, JsonProtocol, MessageType, PingMessage, ProtocolError,
+    SequenceMessage, StreamInvocationMessage, StreamItemMessage,
 };
 #[cfg(feature = "messagepack-brotli")]
 pub use hub::{BrotliDecoder, DefaultBrotliDecoder, MessagePackBrotliProtocol};
