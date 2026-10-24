@@ -10,8 +10,9 @@
 //! - `ACCESS_TOKEN`: bearer token for negotiate and the WebSocket.
 //! - `SIGNALR_HEADERS`: extra negotiate headers, one `Name: value` per line.
 //! - `SIGNALR_CALLS`: path to a JSON file with invocations sent after the handshake:
-//!   `[{"method": "Subscribe", "args": [...], "invocationId": "1"}]`. Without
-//!   `invocationId` the call is fire-and-forget and the server sends no completion.
+//!   `[{"method": "Subscribe", "args": [...], "invocationId": "1", "delaySecs": 10}]`.
+//!   Without `invocationId` the call is fire-and-forget and the server sends no completion.
+//!   `delaySecs` sends the call that many seconds after the handshake, 0 by default.
 //! - `SIGNALR_OUT`: output directory, `frames` by default.
 //! - `SIGNALR_DURATION_SECS`: how long to record, 30 by default.
 //! - `SIGNALR_MAX_FRAMES`: stop after this many frames.
@@ -24,9 +25,12 @@
 //! - `N.M.payload.msgpack`: decompressed payload of message `M` (from 0) in the frame, for
 //!   `messagepack+brotli` messages with a compressed payload.
 //!
+//! Negotiate results, the handshake version and sent calls go to stderr.
+//!
 //! Run with:
 //! `SIGNALR_URL=https://host/hub cargo run --example record --features messagepack-brotli`
 
+use std::collections::VecDeque;
 use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -53,6 +57,8 @@ struct Call {
     #[serde(default)]
     args: Vec<serde_json::Value>,
     invocation_id: Option<String>,
+    #[serde(default)]
+    delay_secs: u64,
 }
 
 struct Recorder {
@@ -74,10 +80,11 @@ async fn main() -> Result<(), BoxError> {
     };
     let stateful = std::env::var("SIGNALR_STATEFUL_RECONNECT").is_ok_and(|value| value == "1");
     let token = std::env::var("ACCESS_TOKEN").ok();
-    let calls: Vec<Call> = match std::env::var("SIGNALR_CALLS") {
+    let mut calls: Vec<Call> = match std::env::var("SIGNALR_CALLS") {
         Ok(path) => serde_json::from_str(&std::fs::read_to_string(path)?)?,
         Err(_) => Vec::new(),
     };
+    calls.sort_by_key(|call| call.delay_secs);
     let duration = Duration::from_secs(env_or("SIGNALR_DURATION_SECS", "30").parse()?);
     let max_frames = match std::env::var("SIGNALR_MAX_FRAMES") {
         Ok(value) => Some(value.parse::<usize>()?),
@@ -99,6 +106,10 @@ async fn main() -> Result<(), BoxError> {
         .timeout(options.timeout)
         .build()?;
     let negotiated = negotiate_with_client(&url, &options, &client, token.as_deref()).await?;
+    eprintln!(
+        "negotiate: negotiateVersion {:?}, useStatefulReconnect {:?}",
+        negotiated.response.negotiate_version, negotiated.response.use_stateful_reconnect
+    );
     let ack_messages = stateful && negotiated.response.use_stateful_reconnect == Some(true);
     let websocket_url = build_websocket_url(
         &url,
@@ -120,6 +131,10 @@ async fn main() -> Result<(), BoxError> {
     transport
         .send_text(HandshakeProtocol.write_request(&handshake)?)
         .await?;
+    eprintln!(
+        "handshake: protocol {}, version {}",
+        handshake.protocol, handshake.version
+    );
 
     let out = PathBuf::from(env_or("SIGNALR_OUT", "frames"));
     std::fs::create_dir_all(&out)?;
@@ -141,6 +156,8 @@ async fn main() -> Result<(), BoxError> {
     let mut keep_alive = tokio::time::interval(KEEP_ALIVE_INTERVAL);
     keep_alive.tick().await;
     let mut handshake_done = false;
+    // Calls with their send time, filled when the handshake completes.
+    let mut pending: VecDeque<(tokio::time::Instant, Call)> = VecDeque::new();
     let mut received = 0_i64;
     let mut acked = 0_i64;
 
@@ -149,6 +166,19 @@ async fn main() -> Result<(), BoxError> {
             () = &mut deadline => break,
             _ = keep_alive.tick() => {
                 send(&transport, protocol.as_ref(), &HubMessage::Ping(PingMessage)).await?;
+                continue;
+            }
+            () = sleep_until_first(&pending), if !pending.is_empty() => {
+                if let Some((_, call)) = pending.pop_front() {
+                    eprintln!("after frame {}: sending {}", recorder.frames, call.method);
+                    let invocation = HubMessage::Invocation(InvocationMessage {
+                        invocation_id: call.invocation_id,
+                        target: call.method,
+                        arguments: call.args,
+                        ..Default::default()
+                    });
+                    send(&transport, protocol.as_ref(), &invocation).await?;
+                }
                 continue;
             }
             message = incoming.recv() => message,
@@ -161,17 +191,12 @@ async fn main() -> Result<(), BoxError> {
             None => break,
             Some(frame) if !handshake_done => {
                 handshake_done = true;
-                let messages = recorder.handshake(&frame)?;
-                for call in &calls {
-                    let invocation = HubMessage::Invocation(InvocationMessage {
-                        invocation_id: call.invocation_id.clone(),
-                        target: call.method.clone(),
-                        arguments: call.args.clone(),
-                        ..Default::default()
-                    });
-                    send(&transport, protocol.as_ref(), &invocation).await?;
-                }
-                messages
+                let now = tokio::time::Instant::now();
+                pending = std::mem::take(&mut calls)
+                    .into_iter()
+                    .map(|call| (now + Duration::from_secs(call.delay_secs), call))
+                    .collect();
+                recorder.handshake(&frame)?
             }
             Some(frame) => recorder.frame(&frame)?,
         };
@@ -333,6 +358,12 @@ fn is_sequenced(message: &HubMessage) -> bool {
             | HubMessage::Completion(_)
             | HubMessage::CancelInvocation(_)
     )
+}
+
+async fn sleep_until_first(pending: &VecDeque<(tokio::time::Instant, Call)>) {
+    if let Some((at, _)) = pending.front() {
+        tokio::time::sleep_until(*at).await;
+    }
 }
 
 fn env_or(name: &str, default: &str) -> String {
