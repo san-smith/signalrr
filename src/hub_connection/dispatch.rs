@@ -205,6 +205,7 @@ impl DispatchContext {
                 .send(TransportEvent::Closed(TransportCloseInfo {
                     error,
                     allow_reconnect: message.allow_reconnect,
+                    transport_dropped: false,
                 }));
         }
 

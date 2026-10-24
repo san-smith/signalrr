@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 
-use tokio::sync::{Notify, mpsc, watch};
+use tokio::sync::{Notify, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant};
 use tracing::{debug, warn};
@@ -36,6 +36,9 @@ pub struct TransportCloseInfo {
     pub error: Option<String>,
     /// When `Some(false)`, automatic reconnect must not be attempted.
     pub allow_reconnect: Option<bool>,
+    /// The transport dropped on its own, not through a server `Close` message or the server
+    /// timeout. Only then a stateful reconnect may reopen it.
+    pub(crate) transport_dropped: bool,
 }
 
 /// Active hub connection runtime: transport I/O, dispatch, and keepalive tasks.
@@ -131,6 +134,7 @@ impl HubRuntime {
                         let _ = transport_events.send(TransportEvent::Closed(TransportCloseInfo {
                             error: None,
                             allow_reconnect: None,
+                            transport_dropped: true,
                         }));
                     }
                     break;
@@ -158,6 +162,7 @@ impl HubRuntime {
                                 transport_events.send(TransportEvent::Closed(TransportCloseInfo {
                                     error: reason,
                                     allow_reconnect: None,
+                                    transport_dropped: true,
                                 }));
                         }
                         break;
@@ -197,9 +202,20 @@ impl HubRuntime {
         (self.invocation_id.fetch_add(1, Ordering::Relaxed) + 1).to_string()
     }
 
+    /// Sends `message` without waiting for room in a full stateful reconnect buffer.
     pub async fn send(&self, message: &HubMessage) -> Result<(), Error> {
+        self.send_with_backpressure(message).await.map(drop)
+    }
+
+    /// Sends `message`; the receiver, if any, resolves when a full stateful reconnect buffer
+    /// has room again.
+    pub async fn send_with_backpressure(
+        &self,
+        message: &HubMessage,
+    ) -> Result<Option<oneshot::Receiver<()>>, Error> {
+        let mut backpressure = None;
         if let Some(buffer) = &self.message_buffer {
-            buffer
+            backpressure = buffer
                 .send(message, &self.transport, self.transfer_format)
                 .await?;
         } else {
@@ -212,7 +228,7 @@ impl HubRuntime {
             .await?;
         }
         self.activity.notify_one();
-        Ok(())
+        Ok(backpressure)
     }
 
     pub async fn send_initial_ping(&self) -> Result<(), Error> {
@@ -338,6 +354,7 @@ async fn run_keepalive(keepalive: Keepalive) {
                         let _ = transport_events.send(TransportEvent::Closed(TransportCloseInfo {
                             error: Some(SERVER_TIMEOUT_MESSAGE.into()),
                             allow_reconnect: None,
+                            transport_dropped: false,
                         }));
                     }
                     let _ = transport.close().await;

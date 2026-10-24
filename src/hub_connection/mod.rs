@@ -33,7 +33,7 @@ pub use upload_stream::{ClientUploadStream, HubArgument};
 
 use crate::access_token::AccessTokenFactory;
 use crate::bus::{ClientHandlerId, ClientMethodOutput, INVOCATION_CANCELED_MESSAGE, MessageBus};
-use crate::connection::{Connection, ConnectionOptions};
+use crate::connection::{Connection, ConnectionOptions, ResumeTarget};
 use crate::error::Error;
 use crate::handshake::{HandshakeRequest, RemainingData};
 use crate::hub::arguments::Arguments;
@@ -55,6 +55,8 @@ pub struct HubConnection {
     runtime: Arc<RwLock<Option<HubRuntime>>>,
     bus: MessageBus,
     message_buffer: Arc<RwLock<Option<Arc<MessageBuffer>>>>,
+    /// How to reopen the transport of the current connection for stateful reconnect.
+    resume: Arc<RwLock<Option<ResumeTarget>>>,
     reconnect_policy: Option<Arc<dyn RetryPolicy>>,
     closing: Arc<AtomicBool>,
     stop_reconnect: watch::Sender<bool>,
@@ -77,6 +79,7 @@ impl HubConnection {
             runtime: Arc::new(RwLock::new(None)),
             bus: MessageBus::default(),
             message_buffer: Arc::new(RwLock::new(None)),
+            resume: Arc::new(RwLock::new(None)),
             reconnect_policy,
             closing: Arc::new(AtomicBool::new(false)),
             stop_reconnect,
@@ -171,15 +174,6 @@ impl HubConnection {
         self.closing.store(false, Ordering::Relaxed);
         let _ = self.stop_reconnect.send(false);
 
-        if self.options.negotiate.use_stateful_reconnect
-            && self.message_buffer.read().await.is_none()
-        {
-            *self.message_buffer.write().await = Some(Arc::new(MessageBuffer::new(
-                self.options.hub_protocol.clone(),
-                self.options.stateful_reconnect_buffer_size,
-            )));
-        }
-
         let _connect_guard = self.connect_operation.lock().await;
 
         if self.closing.load(Ordering::Relaxed) {
@@ -187,7 +181,7 @@ impl HubConnection {
             return Err(Error::Aborted("connection stopped during start".into()));
         }
 
-        match self.connect_runtime(false).await {
+        match self.connect_runtime().await {
             Ok(events_rx) => {
                 if self.closing.load(Ordering::Relaxed) {
                     self.shutdown_active_connection(None).await?;
@@ -248,6 +242,7 @@ impl HubConnection {
         }
 
         *self.message_buffer.write().await = None;
+        *self.resume.write().await = None;
         *self.connection_id.write().await = None;
         *self.remaining_handshake_data.write().await = None;
         *self.initial_messages.write().await = Vec::new();
@@ -383,6 +378,7 @@ impl HubConnection {
         };
 
         let response = self.bus.register_pending(invocation_id.clone()).await?;
+        let invocation_id_for_cleanup = invocation_id.clone();
 
         let message = HubMessage::Invocation(InvocationMessage {
             headers: Default::default(),
@@ -392,14 +388,11 @@ impl HubConnection {
             stream_ids,
         });
 
-        launch_upload_streams(runtime.clone(), streams, async move {
-            let active_runtime = runtime.read().await;
-            active_runtime
-                .as_ref()
-                .ok_or(Error::NotConnected)?
-                .send(&message)
-                .await
-        });
+        if let Err(error) = send_through(&runtime, &message).await {
+            self.bus.remove_pending(&invocation_id_for_cleanup).await;
+            return Err(error);
+        }
+        launch_upload_streams(runtime, streams);
 
         match response.await? {
             Ok(value) => Ok(value),
@@ -433,6 +426,7 @@ impl HubConnection {
         };
 
         let items = self.bus.register_stream(invocation_id.clone()).await?;
+        let invocation_id_for_cleanup = invocation_id.clone();
         let stream = HubMethodStream::new(
             invocation_id.clone(),
             items,
@@ -448,14 +442,11 @@ impl HubConnection {
             stream_ids,
         });
 
-        launch_upload_streams(runtime.clone(), streams, async move {
-            let active_runtime = runtime.read().await;
-            active_runtime
-                .as_ref()
-                .ok_or(Error::NotConnected)?
-                .send(&message)
-                .await
-        });
+        if let Err(error) = send_through(&runtime, &message).await {
+            self.bus.remove_pending(&invocation_id_for_cleanup).await;
+            return Err(error);
+        }
+        launch_upload_streams(runtime, streams);
 
         Ok(stream)
     }
@@ -501,24 +492,21 @@ impl HubConnection {
             stream_ids,
         });
 
-        launch_upload_streams(runtime.clone(), streams, async move {
-            let active_runtime = runtime.read().await;
-            active_runtime
-                .as_ref()
-                .ok_or(Error::NotConnected)?
-                .send(&message)
-                .await
-        });
-
+        send_through(&runtime, &message).await?;
+        launch_upload_streams(runtime, streams);
         Ok(())
     }
 
-    async fn connect_runtime(
-        &self,
-        is_reconnect: bool,
-    ) -> Result<mpsc::UnboundedReceiver<TransportEvent>, Error> {
+    async fn connect_runtime(&self) -> Result<mpsc::UnboundedReceiver<TransportEvent>, Error> {
         let mut connection = Connection::connect(self.options.clone()).await?;
         *self.connection_id.write().await = connection.connection_id().map(str::to_string);
+        use_connection_buffer(
+            &connection,
+            &self.options,
+            &self.message_buffer,
+            &self.resume,
+        )
+        .await;
         *self.remaining_handshake_data.write().await =
             connection.remaining_handshake_data().cloned();
         *self.initial_messages.write().await = connection.initial_messages().to_vec();
@@ -552,11 +540,6 @@ impl HubConnection {
             return Err(error);
         }
 
-        if is_reconnect && let Err(error) = runtime.resend_buffered_messages().await {
-            runtime.shutdown().await.ok();
-            return Err(error);
-        }
-
         *self.runtime.write().await = Some(runtime);
         Ok(events_rx)
     }
@@ -572,6 +555,7 @@ impl HubConnection {
         let options = self.options.clone();
         let bus = self.bus.clone();
         let message_buffer = self.message_buffer.clone();
+        let resume = self.resume.clone();
         let reconnect_policy = self.reconnect_policy.clone();
         let closing = self.closing.clone();
         let lifecycle = self.lifecycle.clone();
@@ -592,6 +576,27 @@ impl HubConnection {
 
                         if closing.load(Ordering::Relaxed) {
                             break;
+                        }
+
+                        // Stateful reconnect: the same connection over a new transport,
+                        // invisible to the application, as in the official clients.
+                        let target = resume.read().await.clone();
+                        let buffer = message_buffer.read().await.clone();
+                        if info.transport_dropped
+                            && let (Some(target), Some(buffer)) = (target, buffer)
+                        {
+                            match resume_transport(&target, &buffer, &options, &bus, &runtime)
+                                .await
+                            {
+                                Ok(new_events_rx) => {
+                                    info!("transport reopened with stateful reconnect");
+                                    events_rx = new_events_rx;
+                                    continue;
+                                }
+                                Err(error) => {
+                                    warn!(%error, "stateful reconnect failed");
+                                }
+                            }
                         }
 
                         let cancellation = info
@@ -668,6 +673,7 @@ impl HubConnection {
                                 &options,
                                 &bus,
                                 &message_buffer,
+                                &resume,
                                 &runtime,
                                 &connection_id,
                             )
@@ -722,11 +728,14 @@ async fn reconnect_once(
     options: &ConnectionOptions,
     bus: &MessageBus,
     message_buffer: &Arc<RwLock<Option<Arc<MessageBuffer>>>>,
+    resume: &Arc<RwLock<Option<ResumeTarget>>>,
     runtime: &Arc<RwLock<Option<HubRuntime>>>,
     connection_id: &Arc<RwLock<Option<String>>>,
 ) -> Result<mpsc::UnboundedReceiver<TransportEvent>, Error> {
     let mut connection = Connection::connect(options.clone()).await?;
     *connection_id.write().await = connection.connection_id().map(str::to_string);
+    // A new connection: the server knows nothing of the previous one's messages.
+    use_connection_buffer(&connection, options, message_buffer, resume).await;
 
     let transport = connection.transport();
     let incoming = connection.take_incoming();
@@ -757,12 +766,86 @@ async fn reconnect_once(
         return Err(error);
     }
 
-    if let Err(error) = hub_runtime.resend_buffered_messages().await {
-        hub_runtime.shutdown().await.ok();
-        return Err(error);
+    *runtime.write().await = Some(hub_runtime);
+    Ok(events_rx)
+}
+
+/// Sends `message` through the active runtime. A full stateful reconnect buffer is waited
+/// on after the runtime lock is released, so a reconnect is not blocked meanwhile.
+async fn send_through(
+    runtime: &RwLock<Option<HubRuntime>>,
+    message: &HubMessage,
+) -> Result<(), Error> {
+    let backpressure = {
+        let active_runtime = runtime.read().await;
+        active_runtime
+            .as_ref()
+            .ok_or(Error::NotConnected)?
+            .send_with_backpressure(message)
+            .await?
+    };
+    if let Some(room) = backpressure {
+        let _ = room.await;
+    }
+    Ok(())
+}
+
+/// Gives a newly established connection its own stateful reconnect buffer, or none when
+/// the server did not agree to stateful reconnect.
+async fn use_connection_buffer(
+    connection: &Connection,
+    options: &ConnectionOptions,
+    message_buffer: &Arc<RwLock<Option<Arc<MessageBuffer>>>>,
+    resume: &Arc<RwLock<Option<ResumeTarget>>>,
+) {
+    let target = connection.resume_target();
+    let buffer = target.as_ref().map(|_| {
+        Arc::new(MessageBuffer::new(
+            options.hub_protocol.clone(),
+            options.stateful_reconnect_buffer_size,
+        ))
+    });
+    if let Some(previous) = std::mem::replace(&mut *message_buffer.write().await, buffer) {
+        previous.dispose().await;
+    }
+    *resume.write().await = target;
+}
+
+/// Reopens the transport of the current connection and resends what the server has not
+/// acknowledged. Sends during the reopen stay in the buffer.
+async fn resume_transport(
+    target: &ResumeTarget,
+    buffer: &Arc<MessageBuffer>,
+    options: &ConnectionOptions,
+    bus: &MessageBus,
+    runtime: &Arc<RwLock<Option<HubRuntime>>>,
+) -> Result<mpsc::UnboundedReceiver<TransportEvent>, Error> {
+    buffer.disconnected();
+    if let Some(current) = runtime.read().await.as_ref() {
+        current.abort_without_close().await;
     }
 
-    *runtime.write().await = Some(hub_runtime);
+    let (transport, incoming) = target.reopen(options).await?;
+    let (transport_events, events_rx) = mpsc::unbounded_channel();
+    let reopened = HubRuntime::start(HubRuntimeOptions {
+        transport,
+        incoming,
+        hub_protocol: options.hub_protocol.clone(),
+        transfer_format: options.transfer_format,
+        initial_messages: Vec::new(),
+        server_timeout: options.server_timeout,
+        keep_alive_interval: options.keep_alive_interval,
+        bus: bus.clone(),
+        message_buffer: Some(buffer.clone()),
+        transport_events,
+    })?;
+
+    // Sends wait for the write lock, so none goes to the old transport after the resend.
+    let mut active = runtime.write().await;
+    *active = Some(reopened);
+    if let Some(reopened) = active.as_ref() {
+        reopened.resend_buffered_messages().await?;
+    }
     Ok(events_rx)
 }
 

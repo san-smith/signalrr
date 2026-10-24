@@ -34,6 +34,8 @@ pub struct MessageBuffer {
     buffered_byte_count: Mutex<usize>,
     reconnect_in_progress: Arc<AtomicBool>,
     ack_timer: Mutex<Option<JoinHandle<()>>>,
+    /// An `Ack` is scheduled and not sent yet.
+    ack_scheduled: Arc<AtomicBool>,
 }
 
 impl MessageBuffer {
@@ -49,21 +51,28 @@ impl MessageBuffer {
             buffered_byte_count: Mutex::new(0),
             reconnect_in_progress: Arc::new(AtomicBool::new(false)),
             ack_timer: Mutex::new(None),
+            ack_scheduled: Arc::new(AtomicBool::new(false)),
         }
     }
 
+    /// Buffers and sends `message`. When the buffer is full, the returned receiver resolves
+    /// once acknowledgements free enough room; the caller waits on it without holding locks
+    /// a reconnect needs.
     pub async fn send(
         &self,
         message: &HubMessage,
         transport: &WebSocketTransport,
         transfer_format: TransferFormat,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<oneshot::Receiver<()>>, Error> {
         let serialized = self
             .protocol
             .write_message(message)
             .map_err(|error| Error::Protocol(error.to_string()))?;
 
         let mut backpressure_rx = None;
+        // Buffering and the decision to send happen under the buffer lock, so a concurrent
+        // `resend` either includes this message or sees it sent here, never both.
+        let mut messages = self.messages.lock().await;
 
         if is_invocation_message(message) {
             let mut total = self.total_message_count.lock().await;
@@ -83,25 +92,23 @@ impl MessageBuffer {
                 None
             };
 
-            self.messages.lock().await.push(BufferedItem {
+            messages.push(BufferedItem {
                 message: serialized.clone(),
                 id,
                 backpressure,
             });
         }
+        let send_now = !self.reconnect_in_progress.load(Ordering::Relaxed);
+        drop(messages);
 
-        if !self.reconnect_in_progress.load(Ordering::Relaxed)
+        if send_now
             && let Err(error) = send_serialized(transport, transfer_format, &serialized).await
         {
             self.disconnected();
             return Err(error);
         }
 
-        if let Some(rx) = backpressure_rx {
-            let _ = rx.await;
-        }
-
-        Ok(())
+        Ok(backpressure_rx)
     }
 
     pub async fn ack(&self, ack: AckMessage) {
@@ -189,7 +196,9 @@ impl MessageBuffer {
         transport: &WebSocketTransport,
         transfer_format: TransferFormat,
     ) -> Result<(), Error> {
-        let sequence_id = match self.messages.lock().await.first() {
+        // Held until sending resumes, see `send`.
+        let messages = self.messages.lock().await;
+        let sequence_id = match messages.first() {
             Some(item) => item.id,
             None => *self.total_message_count.lock().await + 1,
         };
@@ -202,15 +211,8 @@ impl MessageBuffer {
         )
         .await?;
 
-        let messages: Vec<Vec<u8>> = self
-            .messages
-            .lock()
-            .await
-            .iter()
-            .map(|item| item.message.clone())
-            .collect();
-        for message in messages {
-            send_serialized(transport, transfer_format, &message).await?;
+        for item in messages.iter() {
+            send_serialized(transport, transfer_format, &item.message).await?;
         }
 
         self.reconnect_in_progress.store(false, Ordering::Relaxed);
@@ -228,10 +230,11 @@ impl MessageBuffer {
         transport: &WebSocketTransport,
         transfer_format: TransferFormat,
     ) {
-        if self.ack_timer.lock().await.is_some() {
+        if self.ack_scheduled.swap(true, Ordering::Relaxed) {
             return;
         }
 
+        let ack_scheduled = self.ack_scheduled.clone();
         let protocol = self.protocol.clone();
         let latest_received_sequence_id = self.latest_received_sequence_id.clone();
         let reconnect_in_progress = self.reconnect_in_progress.clone();
@@ -239,18 +242,17 @@ impl MessageBuffer {
 
         let task = tokio::spawn(async move {
             sleep(ACK_DELAY).await;
-            if reconnect_in_progress.load(Ordering::Relaxed) {
-                return;
+            if !reconnect_in_progress.load(Ordering::Relaxed) {
+                let sequence_id = *latest_received_sequence_id.lock().await;
+                let _ = send_hub_message(
+                    &transport,
+                    protocol.as_ref(),
+                    transfer_format,
+                    &HubMessage::Ack(AckMessage { sequence_id }),
+                )
+                .await;
             }
-
-            let sequence_id = *latest_received_sequence_id.lock().await;
-            let _ = send_hub_message(
-                &transport,
-                protocol.as_ref(),
-                transfer_format,
-                &HubMessage::Ack(AckMessage { sequence_id }),
-            )
-            .await;
+            ack_scheduled.store(false, Ordering::Relaxed);
         });
 
         *self.ack_timer.lock().await = Some(task);

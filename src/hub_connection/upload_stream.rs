@@ -1,7 +1,6 @@
 //! Client-to-server streaming hub method arguments.
 
 use std::collections::HashMap;
-use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -11,7 +10,6 @@ use serde_json::Value;
 use tokio::sync::{RwLock, mpsc};
 use tracing::warn;
 
-use crate::error::Error;
 use crate::hub::message::{CompletionMessage, HubMessage, StreamItemMessage};
 use crate::hub_connection::runtime::HubRuntime;
 
@@ -139,29 +137,17 @@ enum UploadCommand {
     },
 }
 
+/// Sends the items of client upload streams in the background; call it after the
+/// invocation that announces the streams has been sent.
 pub(crate) fn launch_upload_streams(
     runtime: Arc<RwLock<Option<HubRuntime>>>,
     streams: HashMap<String, ClientUploadStream>,
-    initial_send: impl Future<Output = Result<(), Error>> + Send + 'static,
 ) {
     if streams.is_empty() {
-        tokio::spawn(async move {
-            if let Err(error) = initial_send.await {
-                warn!(?error, "failed to send hub invocation");
-            }
-        });
         return;
     }
 
     tokio::spawn(async move {
-        if let Err(error) = initial_send.await {
-            warn!(
-                ?error,
-                "failed to send hub invocation before launching upload streams"
-            );
-            return;
-        }
-
         let (command_tx, mut command_rx) = mpsc::unbounded_channel();
 
         for (stream_id, stream) in streams {
@@ -312,7 +298,8 @@ mod tests {
             ]),
         );
 
-        launch_upload_streams(runtime, streams, initial_send);
+        initial_send.await.unwrap();
+        launch_upload_streams(runtime, streams);
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
@@ -371,7 +358,8 @@ mod tests {
             ])),
         );
 
-        launch_upload_streams(runtime, streams, initial_send);
+        initial_send.await.unwrap();
+        launch_upload_streams(runtime, streams);
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         let messages = outgoing.lock().await;

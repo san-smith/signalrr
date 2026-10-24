@@ -52,6 +52,9 @@ pub struct NegotiateResult {
     pub access_token: Option<String>,
     /// Hub URL the transport connects to: the original one or the last redirect.
     pub url: String,
+    /// `access_token` was issued by the server during a redirect rather than taken from
+    /// the caller's token source.
+    pub(crate) token_from_server: bool,
 }
 
 /// Options for the negotiate request.
@@ -168,6 +171,7 @@ async fn negotiate_with_source(
 ) -> Result<NegotiateResult, Error> {
     let mut current_url = hub_url.to_string();
     let mut redirects = 0;
+    let mut token_from_server = false;
 
     loop {
         let response = match negotiate_once(&current_url, options, client, token.token()).await {
@@ -189,6 +193,7 @@ async fn negotiate_with_source(
 
         if let Some(server_token) = &response.access_token {
             token = TokenSource::Fixed(Some(server_token.clone()));
+            token_from_server = true;
         }
 
         let Some(redirect_url) = response.url.clone() else {
@@ -196,6 +201,7 @@ async fn negotiate_with_source(
                 response,
                 access_token: token.into_token(),
                 url: current_url,
+                token_from_server,
             });
         };
 

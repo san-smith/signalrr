@@ -72,6 +72,47 @@ impl ConnectionOptions {
     }
 }
 
+/// What a stateful reconnect needs to reopen the transport of an established connection.
+#[derive(Clone)]
+pub(crate) struct ResumeTarget {
+    /// WebSocket URL with the connection token, without the access token.
+    url: String,
+    /// Token the server issued during negotiate; reused as is. Otherwise the token comes
+    /// from the access token factory again.
+    server_token: Option<String>,
+}
+
+impl ResumeTarget {
+    /// Reopens the WebSocket of the connection, without negotiate and handshake.
+    pub(crate) async fn reopen(
+        &self,
+        options: &ConnectionOptions,
+    ) -> Result<
+        (
+            WebSocketTransport,
+            mpsc::UnboundedReceiver<TransportMessage>,
+        ),
+        Error,
+    > {
+        let token = match &self.server_token {
+            Some(token) => Some(token.clone()),
+            None => crate::access_token::resolve(options.access_token_factory.as_ref()).await?,
+        };
+        let url = crate::transport::append_access_token(&self.url, token.as_deref())?;
+        debug!(url = %self.url, "reopening websocket transport");
+        let (mut transport, incoming) = WebSocketTransport::connect_with_options(
+            &url,
+            None,
+            WebSocketConnectOptions {
+                log_message_content: options.log_message_content,
+            },
+        )
+        .await?;
+        transport.enable_send_queue();
+        Ok((transport, incoming))
+    }
+}
+
 /// Established SignalR transport connection.
 pub struct Connection {
     base_url: String,
@@ -81,6 +122,8 @@ pub struct Connection {
     handshake_result: HandshakeResult,
     initial_messages: Vec<HubMessage>,
     incoming: mpsc::UnboundedReceiver<TransportMessage>,
+    /// Present when the server agreed to stateful reconnect.
+    resume: Option<ResumeTarget>,
 }
 
 impl Connection {
@@ -90,6 +133,7 @@ impl Connection {
             response,
             access_token,
             url,
+            token_from_server,
         } = {
             let client = match options.http_client.clone() {
                 Some(client) => client,
@@ -109,6 +153,17 @@ impl Connection {
         let connection_token = response.websocket_token()?.to_string();
         let connection_id = response.connection_id.clone();
         let websocket_url = build_websocket_url(&url, &connection_token, access_token.as_deref())?;
+        let resume = match response.use_stateful_reconnect {
+            Some(true) => Some(ResumeTarget {
+                url: build_websocket_url(&url, &connection_token, None)?,
+                server_token: if token_from_server {
+                    access_token.clone()
+                } else {
+                    None
+                },
+            }),
+            _ => None,
+        };
 
         debug!(url = %websocket_url, "starting websocket transport");
         // `build_websocket_url` has already put the token into the URL.
@@ -161,7 +216,13 @@ impl Connection {
             handshake_result,
             initial_messages,
             incoming,
+            resume,
         })
+    }
+
+    /// How to reopen the transport; `None` when stateful reconnect was not negotiated.
+    pub(crate) fn resume_target(&self) -> Option<ResumeTarget> {
+        self.resume.clone()
     }
 
     pub fn connection_id(&self) -> Option<&str> {
