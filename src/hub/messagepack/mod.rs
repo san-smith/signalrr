@@ -3,14 +3,15 @@
 mod parse;
 mod write;
 
+pub(crate) use parse::value_to_json_array;
+pub(crate) use write::json_array_value;
+
 #[cfg(feature = "messagepack-brotli")]
 pub mod brotli;
 
-use rmpv::Value;
-
 use crate::framing::BinaryMessageFormat;
 use crate::hub::message::HubMessage;
-use crate::hub::messagepack::parse::parse_message;
+use crate::hub::messagepack::parse::{decode_message, parse_message};
 use crate::hub::messagepack::write::write_message as write_hub_message;
 use crate::hub::protocol::{HubProtocol, HubProtocolInput, ProtocolError};
 use crate::transport::TransferFormat;
@@ -57,18 +58,8 @@ impl HubProtocol for MessagePackProtocol {
                 ));
             }
 
-            let unpacked: Value =
-                rmpv::decode::read_value(&mut frame.as_slice()).map_err(|error| {
-                    ProtocolError::MessagePack(format!(
-                        "failed to decode messagepack payload: {error}"
-                    ))
-                })?;
-
-            let Value::Array(items) = unpacked else {
-                return Err(ProtocolError::InvalidPayload("invalid payload".into()));
-            };
-
-            if let Some(message) = parse_message(&items)? {
+            let (items, raw_arguments) = decode_message(&frame, 4)?;
+            if let Some(message) = parse_message(&items, raw_arguments)? {
                 messages.push(message);
             }
         }

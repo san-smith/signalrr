@@ -5,6 +5,9 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::hub::arguments::Arguments;
+use crate::hub::protocol::ProtocolError;
+
 /// Numeric hub message type identifiers from the SignalR protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(i32)]
@@ -87,9 +90,11 @@ impl HubMessage {
         }
     }
 
-    pub fn to_json_value(&self) -> Value {
-        match self {
-            Self::Invocation(message) => message.to_json(),
+    /// Returns the message in the JSON protocol layout. Fails only when MessagePack invocation
+    /// arguments cannot be decoded.
+    pub fn to_json_value(&self) -> Result<Value, ProtocolError> {
+        Ok(match self {
+            Self::Invocation(message) => message.to_json()?,
             Self::StreamInvocation(message) => message.to_json(),
             Self::StreamItem(message) => message.to_json(),
             Self::Completion(message) => message.to_json(),
@@ -98,7 +103,7 @@ impl HubMessage {
             Self::Close(message) => message.to_json(),
             Self::Ack(message) => message.to_json(),
             Self::Sequence(message) => message.to_json(),
-        }
+        })
     }
 }
 
@@ -107,7 +112,7 @@ pub struct InvocationMessage {
     pub headers: HashMap<String, String>,
     pub invocation_id: Option<String>,
     pub target: String,
-    pub arguments: Vec<Value>,
+    pub arguments: Arguments,
     pub stream_ids: Option<Vec<String>>,
 }
 
@@ -117,12 +122,12 @@ impl InvocationMessage {
             headers: parse_headers(obj.get("headers").unwrap_or(&Value::Null)),
             invocation_id: parse_optional_string(obj.get("invocationId")),
             target: obj.get("target")?.as_str()?.to_string(),
-            arguments: obj.get("arguments")?.as_array()?.to_vec(),
+            arguments: obj.get("arguments")?.as_array()?.to_vec().into(),
             stream_ids: parse_optional_string_list(obj.get("streamIds")),
         })
     }
 
-    fn to_json(&self) -> Value {
+    fn to_json(&self) -> Result<Value, ProtocolError> {
         let mut map = serde_json::Map::new();
         map.insert(
             "type".into(),
@@ -131,9 +136,12 @@ impl InvocationMessage {
         insert_optional_map(&mut map, "headers", &self.headers);
         insert_optional_string(&mut map, "invocationId", self.invocation_id.as_deref());
         map.insert("target".into(), Value::String(self.target.clone()));
-        map.insert("arguments".into(), Value::Array(self.arguments.clone()));
+        map.insert(
+            "arguments".into(),
+            Value::Array(self.arguments.json_values()?),
+        );
         insert_optional_string_list(&mut map, "streamIds", self.stream_ids.as_deref());
-        Value::Object(map)
+        Ok(Value::Object(map))
     }
 }
 

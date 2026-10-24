@@ -296,7 +296,7 @@ mod tests {
                         headers: Default::default(),
                         invocation_id: Some("99".into()),
                         target: "Upload".into(),
-                        arguments: vec![],
+                        arguments: Default::default(),
                         stream_ids: Some(vec!["1".into()]),
                     },
                 ))
@@ -355,7 +355,7 @@ mod tests {
                         headers: Default::default(),
                         invocation_id: None,
                         target: "Upload".into(),
-                        arguments: vec![],
+                        arguments: Default::default(),
                         stream_ids: Some(vec!["1".into()]),
                     },
                 ))

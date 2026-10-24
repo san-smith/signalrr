@@ -44,7 +44,7 @@ impl HubProtocol for JsonProtocol {
     }
 
     fn write_message(&self, message: &HubMessage) -> Result<Vec<u8>, ProtocolError> {
-        let json = serde_json::to_string(&message.to_json_value())?;
+        let json = serde_json::to_string(&message.to_json_value()?)?;
         Ok(TextMessageFormat::write(&json).into_bytes())
     }
 }

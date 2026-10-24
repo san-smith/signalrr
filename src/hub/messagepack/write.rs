@@ -113,7 +113,7 @@ pub fn write_invocation(message: &InvocationMessage) -> Result<Vec<u8>, Protocol
         headers_value(&message.headers),
         optional_string_value(message.invocation_id.as_deref()),
         Value::String(message.target.clone().into()),
-        json_array_value(&message.arguments),
+        message.arguments.messagepack_value()?,
     ];
 
     if let Some(stream_ids) = &message.stream_ids
@@ -278,7 +278,7 @@ mod tests {
             headers: HashMap::new(),
             invocation_id: "1".into(),
             target: "target".into(),
-            arguments: Vec::new(),
+            arguments: Default::default(),
             stream_ids: None,
         };
         assert_eq!(
@@ -295,7 +295,7 @@ mod tests {
             headers: HashMap::new(),
             invocation_id: None,
             target: "target".into(),
-            arguments: Vec::new(),
+            arguments: Default::default(),
             stream_ids: None,
         };
         assert_eq!(

@@ -28,10 +28,10 @@ The crate is developed, not rewritten.
    subscribe, receive a large snapshot. Save the raw frames as fixtures for `insta`
    snapshot tests. The test is opt-in (ignored by default, endpoint from an environment
    variable), so the default test run needs no network.
-3. **Typed receive.** Handlers get `Vec<serde_json::Value>` today: MessagePack goes through
-   `rmpv`, then a JSON value, then the target struct. For a snapshot of ~1.5k entities this
-   is a double conversion. Add `on_typed::<T: DeserializeOwned>` that deserializes straight
-   from the protocol representation.
+3. ~~**Typed receive.**~~ Done 2026-10-24: invocation arguments stay in the protocol
+   representation (`Arguments`, raw bytes for MessagePack) and `on_typed::<T>` deserializes
+   them with `rmp-serde`. On a 7 MB synthetic invocation (`benches/typed_receive.rs`) it is
+   25 ms instead of 246 ms through `serde_json::Value`.
 4. **Integration harness.** An in-process fake hub on `tokio_tungstenite::accept_async`
    covering negotiate, handshake, connection drop, reconnect and stateful reconnect. Only
    unit tests exist now.

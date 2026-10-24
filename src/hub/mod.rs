@@ -2,12 +2,14 @@
 
 use std::sync::Arc;
 
+pub mod arguments;
 pub mod json;
 pub mod message;
 #[cfg(feature = "messagepack")]
 pub mod messagepack;
 pub mod protocol;
 
+pub use arguments::Arguments;
 pub use json::JsonProtocol;
 pub use message::{
     AckMessage, CancelInvocationMessage, CloseMessage, CompletionMessage, HubMessage,

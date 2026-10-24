@@ -30,6 +30,8 @@ Implemented:
 - lifecycle callbacks: `on_close`, `on_reconnecting`, `on_reconnected`
 - pending invocation cancellation on disconnect and server `CloseMessage` handling
 - multiple client handlers per hub method (`on` / `on_async`, `off` / `off_handler`)
+- typed handlers (`on_typed`): arguments are deserialized into your type straight from the
+  received MessagePack bytes, without an intermediate `serde_json::Value`
 - client-to-server streaming hub method arguments (`HubArgument::Stream`)
 - transport send queue for ordered WebSocket writes
 - injectable HTTP client for negotiate (`with_http_client`)
@@ -67,6 +69,16 @@ async fn main() -> Result<(), signalrr::Error> {
             println!("Message: {args:?}");
             None
         })
+        .await;
+
+    #[derive(serde::Deserialize, Debug)]
+    struct Price {
+        id: i64,
+        value: f64,
+    }
+    // A tuple with one element per argument of the server call.
+    connection
+        .on_typed("PriceChanged", |(price,): (Price,)| println!("Price: {price:?}"))
         .await;
 
     let upload = ClientUploadStream::from_iter([serde_json::json!("chunk")]);

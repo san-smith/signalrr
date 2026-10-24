@@ -299,7 +299,7 @@ mod tests {
                 headers: Default::default(),
                 invocation_id: None,
                 target: "t".into(),
-                arguments: Vec::new(),
+                arguments: Default::default(),
                 stream_ids: None,
             }
         )));
@@ -326,7 +326,7 @@ mod tests {
                     headers: Default::default(),
                     invocation_id: Some("1".into()),
                     target: "m".into(),
-                    arguments: Vec::new(),
+                    arguments: Default::default(),
                     stream_ids: None,
                 }),
                 &transport,
@@ -353,7 +353,7 @@ mod tests {
                         headers: Default::default(),
                         invocation_id: None,
                         target: "t".into(),
-                        arguments: Vec::new(),
+                        arguments: Default::default(),
                         stream_ids: None,
                     }),
                     &transport,

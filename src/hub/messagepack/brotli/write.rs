@@ -37,7 +37,7 @@ pub fn write_invocation_brotli(message: &InvocationMessage) -> Result<Vec<u8>, P
         optional_string_value(message.invocation_id.as_deref()),
         Value::String(message.target.clone().into()),
         Value::from(0),
-        json_array_value(&message.arguments),
+        message.arguments.messagepack_value()?,
     ];
 
     if let Some(stream_ids) = &message.stream_ids
@@ -144,7 +144,8 @@ mod tests {
             arguments: vec![
                 serde_json::Value::String("arg1".into()),
                 serde_json::Value::String("arg2".into()),
-            ],
+            ]
+            .into(),
             stream_ids: None,
         };
 
@@ -270,7 +271,7 @@ mod tests {
 
         let decoder: Arc<dyn crate::hub::messagepack::brotli::BrotliDecoder> =
             Arc::new(DefaultBrotliDecoder);
-        let decoded = parse_message(&items, &decoder)
+        let decoded = parse_message(&items, None, &decoder)
             .unwrap()
             .expect("completion message");
 

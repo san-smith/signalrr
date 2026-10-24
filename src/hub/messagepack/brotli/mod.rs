@@ -6,14 +6,13 @@ mod write;
 
 use std::sync::Arc;
 
-use rmpv::Value;
-
 pub use decoder::{BrotliDecoder, DefaultBrotliDecoder};
 
 use crate::framing::BinaryMessageFormat;
 use crate::hub::message::HubMessage;
 use crate::hub::messagepack::brotli::parse::parse_message;
 use crate::hub::messagepack::brotli::write::write_message as write_brotli_message;
+use crate::hub::messagepack::parse::decode_message;
 use crate::hub::protocol::{HubProtocol, HubProtocolInput, ProtocolError};
 use crate::transport::TransferFormat;
 
@@ -75,24 +74,14 @@ impl HubProtocol for MessagePackBrotliProtocol {
                 ));
             }
 
-            let unpacked: Value =
-                rmpv::decode::read_value(&mut frame.as_slice()).map_err(|error| {
-                    ProtocolError::MessagePack(format!(
-                        "failed to decode messagepack payload: {error}"
-                    ))
-                })?;
-
-            let Value::Array(items) = unpacked else {
-                return Err(ProtocolError::InvalidPayload("invalid payload".into()));
-            };
-
+            let (items, raw_arguments) = decode_message(&frame, 5)?;
             if items.is_empty() {
                 return Err(ProtocolError::InvalidPayload(
                     "cannot encode message which is null".into(),
                 ));
             }
 
-            if let Some(message) = parse_message(&items, &self.decoder)? {
+            if let Some(message) = parse_message(&items, raw_arguments, &self.decoder)? {
                 messages.push(message);
             }
         }
@@ -116,7 +105,7 @@ mod tests {
             headers: Default::default(),
             invocation_id: Some("id".into()),
             target: "target".into(),
-            arguments: vec![serde_json::json!("arg")],
+            arguments: vec![serde_json::json!("arg")].into(),
             stream_ids: None,
         });
 
@@ -129,7 +118,10 @@ mod tests {
         assert_eq!(decoded.len(), 1);
         if let HubMessage::Invocation(message) = &decoded[0] {
             assert_eq!(message.target, "target");
-            assert_eq!(message.arguments, vec![serde_json::json!("arg")]);
+            assert_eq!(
+                message.arguments.to_json().unwrap(),
+                vec![serde_json::json!("arg")]
+            );
         } else {
             panic!("expected invocation message");
         }

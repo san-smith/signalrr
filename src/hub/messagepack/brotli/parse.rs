@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use rmpv::Value;
 
+use crate::hub::arguments::Arguments;
 use crate::hub::message::{
     CompletionMessage, HubMessage, InvocationMessage, MessageType, StreamInvocationMessage,
     StreamItemMessage,
@@ -20,8 +21,11 @@ const ERROR_RESULT: i64 = 1;
 const VOID_RESULT: i64 = 2;
 const NON_VOID_RESULT: i64 = 3;
 
+/// Parses a decoded message; `raw_arguments` are the encoded invocation arguments from
+/// [`decode_message`](crate::hub::messagepack::parse::decode_message).
 pub fn parse_message(
     data: &[Value],
+    raw_arguments: Option<&[u8]>,
     decoder: &Arc<dyn BrotliDecoder>,
 ) -> Result<Option<HubMessage>, ProtocolError> {
     if data.is_empty() {
@@ -35,7 +39,7 @@ pub fn parse_message(
 
     let message = match message_type {
         MessageType::Invocation => {
-            HubMessage::Invocation(create_invocation_message(data, decoder)?)
+            HubMessage::Invocation(create_invocation_message(data, raw_arguments, decoder)?)
         }
         MessageType::StreamInvocation => {
             HubMessage::StreamInvocation(create_stream_invocation_message(data, decoder)?)
@@ -129,6 +133,7 @@ fn create_stream_item_message(
 
 fn create_invocation_message(
     data: &[Value],
+    raw_arguments: Option<&[u8]>,
     decoder: &Arc<dyn BrotliDecoder>,
 ) -> Result<InvocationMessage, ProtocolError> {
     if data.len() < 5 {
@@ -138,9 +143,18 @@ fn create_invocation_message(
     }
 
     let is_compressed = data.get(4).and_then(|value| value.as_i64()) == Some(1);
-    let arguments = match unpack_data(data.get(5), is_compressed, decoder)? {
-        Some(value) => value_to_json_array(&value)?,
-        None => Vec::new(),
+    let arguments = match raw_arguments {
+        None => Arguments::default(),
+        Some(raw) if is_compressed => {
+            let packed = rmpv::decode::read_value(&mut &raw[..]).map_err(|error| {
+                ProtocolError::MessagePack(format!("failed to decode arguments: {error}"))
+            })?;
+            let bytes = value_to_bytes(&packed).ok_or_else(|| {
+                ProtocolError::InvalidPayload("compressed arguments are not binary".into())
+            })?;
+            Arguments::from_messagepack(decoder.decode(&bytes)?)?
+        }
+        Some(raw) => Arguments::from_messagepack(raw.to_vec())?,
     };
 
     Ok(InvocationMessage {
@@ -222,6 +236,12 @@ mod tests {
     use super::*;
     use crate::hub::message::{AckMessage, PingMessage};
     use crate::hub::messagepack::brotli::decoder::DefaultBrotliDecoder;
+
+    fn encode_value(value: &Value) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        rmpv::encode::write_value(&mut bytes, value).unwrap();
+        bytes
+    }
 
     fn decoder() -> Arc<dyn BrotliDecoder> {
         Arc::new(DefaultBrotliDecoder)
@@ -309,16 +329,17 @@ mod tests {
                 Value::String("invocationId".into()),
                 Value::String("target".into()),
                 Value::from(0),
-                Value::Array(vec![
-                    Value::String("arg1".into()),
-                    Value::String("arg2".into()),
-                ]),
+                Value::Nil,
             ],
+            Some(&encode_value(&Value::Array(vec![
+                Value::String("arg1".into()),
+                Value::String("arg2".into()),
+            ]))),
             &identity_decoder(),
         )
         .unwrap();
         assert_eq!(invocation.target, "target");
-        assert_eq!(invocation.arguments.len(), 2);
+        assert_eq!(invocation.arguments.to_json().unwrap().len(), 2);
     }
 
     #[test]
@@ -352,20 +373,22 @@ mod tests {
                     Value::String("id".into()),
                     Value::String("target".into()),
                     Value::from(0),
-                    Value::Array(vec![]),
+                    Value::Nil,
                 ],
+                Some(&encode_value(&Value::Array(vec![]))),
                 &decoder,
             )
             .unwrap(),
             Some(HubMessage::Invocation(_))
         ));
         assert!(matches!(
-            parse_message(&[Value::from(MessageType::Ping as i32)], &decoder).unwrap(),
+            parse_message(&[Value::from(MessageType::Ping as i32)], None, &decoder).unwrap(),
             Some(HubMessage::Ping(PingMessage))
         ));
         assert!(matches!(
             parse_message(
                 &[Value::from(MessageType::Close as i32), Value::Nil],
+                None,
                 &decoder,
             )
             .unwrap(),
@@ -374,13 +397,14 @@ mod tests {
         assert!(matches!(
             parse_message(
                 &[Value::from(MessageType::Ack as i32), Value::from(1)],
+                None,
                 &decoder,
             )
             .unwrap(),
             Some(HubMessage::Ack(AckMessage { sequence_id: 1 }))
         ));
         assert!(
-            parse_message(&[Value::from(99)], &decoder)
+            parse_message(&[Value::from(99)], None, &decoder)
                 .unwrap()
                 .is_none()
         );

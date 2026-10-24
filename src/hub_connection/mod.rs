@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tokio::sync::{Mutex, Notify, RwLock, mpsc, watch};
 use tracing::{info, warn};
@@ -35,6 +36,7 @@ use crate::bus::{ClientHandlerId, ClientMethodOutput, INVOCATION_CANCELED_MESSAG
 use crate::connection::{Connection, ConnectionOptions};
 use crate::error::Error;
 use crate::handshake::{HandshakeRequest, RemainingData};
+use crate::hub::arguments::Arguments;
 use crate::hub::message::{
     CancelInvocationMessage, HubMessage, InvocationMessage, StreamInvocationMessage,
 };
@@ -257,15 +259,62 @@ impl HubConnection {
 
     /// Registers a synchronous handler for server-to-client hub method invocations.
     ///
+    /// The handler gets the arguments as JSON values; MessagePack arguments are converted
+    /// for it. [`Self::on_typed`] deserializes them into a type directly.
+    ///
     /// Returns a [`ClientHandlerId`] that can be passed to [`Self::off_handler`].
     pub async fn on<F>(&self, method_name: impl Into<String>, handler: F) -> ClientHandlerId
     where
         F: Fn(Vec<Value>) -> Option<Value> + Send + Sync + 'static,
     {
+        let method = method_name.into();
+        let name = method.clone();
         self.bus
             .register_handler(
-                method_name.into(),
-                Arc::new(move |args| ClientMethodOutput::ready(Ok(handler(args)))),
+                method,
+                Arc::new(move |arguments: Arguments| match arguments.to_json() {
+                    Ok(arguments) => ClientMethodOutput::ready(Ok(handler(arguments))),
+                    Err(error) => invalid_arguments(&name, error),
+                }),
+            )
+            .await
+    }
+
+    /// Registers a handler that receives the arguments deserialized into `T`.
+    ///
+    /// `T` is a tuple or a struct matching the argument list, see
+    /// [`Arguments::deserialize`]: `(Update,)` for a method with one argument. MessagePack
+    /// arguments are deserialized straight from the received bytes. For a dynamic field
+    /// inside `T` use `rmpv::Value` or an own `#[serde(untagged)]` enum:
+    /// [`serde_json::Value`] cannot hold maps with integer keys.
+    ///
+    /// When the arguments do not match `T`, the error is logged and the handler is not
+    /// called; an invocation that expects a result completes with that error. Each handler
+    /// deserializes the arguments on its own, so two typed handlers for one method do the
+    /// work twice.
+    pub async fn on_typed<T, F>(
+        &self,
+        method_name: impl Into<String>,
+        handler: F,
+    ) -> ClientHandlerId
+    where
+        T: DeserializeOwned,
+        F: Fn(T) + Send + Sync + 'static,
+    {
+        let method = method_name.into();
+        let name = method.clone();
+        self.bus
+            .register_handler(
+                method,
+                Arc::new(
+                    move |arguments: Arguments| match arguments.deserialize::<T>() {
+                        Ok(value) => {
+                            handler(value);
+                            ClientMethodOutput::ready(Ok(None))
+                        }
+                        Err(error) => invalid_arguments(&name, error),
+                    },
+                ),
             )
             .await
     }
@@ -283,10 +332,15 @@ impl HubConnection {
         F: Fn(Vec<Value>) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = Result<Option<Value>, String>> + Send + 'static,
     {
+        let method = method_name.into();
+        let name = method.clone();
         self.bus
             .register_handler(
-                method_name.into(),
-                Arc::new(move |args| ClientMethodOutput::r#async(handler(args))),
+                method,
+                Arc::new(move |arguments: Arguments| match arguments.to_json() {
+                    Ok(arguments) => ClientMethodOutput::r#async(handler(arguments)),
+                    Err(error) => invalid_arguments(&name, error),
+                }),
             )
             .await
     }
@@ -334,7 +388,7 @@ impl HubConnection {
             headers: Default::default(),
             invocation_id: Some(invocation_id),
             target: method_name.as_ref().to_string(),
-            arguments,
+            arguments: arguments.into(),
             stream_ids,
         });
 
@@ -443,7 +497,7 @@ impl HubConnection {
             headers: Default::default(),
             invocation_id: None,
             target: method_name.as_ref().to_string(),
-            arguments,
+            arguments: arguments.into(),
             stream_ids,
         });
 
@@ -752,6 +806,12 @@ impl HubConnectionConfig {
     }
 }
 
+/// Result of a handler whose invocation arguments could not be read.
+fn invalid_arguments(method: &str, error: Error) -> ClientMethodOutput {
+    warn!(%method, %error, "cannot read invocation arguments");
+    ClientMethodOutput::ready(Err(error.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -780,6 +840,138 @@ mod tests {
             transport_events,
             transport_close_signaled: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    #[derive(Debug, PartialEq, serde::Deserialize)]
+    struct Point {
+        x: i64,
+        y: f64,
+    }
+
+    fn point_invocation(arguments: Vec<Value>) -> HubMessage {
+        HubMessage::Invocation(InvocationMessage {
+            target: "Move".into(),
+            arguments: arguments.into(),
+            ..Default::default()
+        })
+    }
+
+    /// Writes `message` with `protocol` and dispatches what the protocol parses back.
+    async fn dispatch_through(
+        protocol: &dyn crate::hub::protocol::HubProtocol,
+        connection: &HubConnection,
+        message: &HubMessage,
+    ) {
+        let frame = protocol.write_message(message).unwrap();
+        let input = match protocol.transfer_format() {
+            TransferFormat::Text => HubProtocolInput::Text(std::str::from_utf8(&frame).unwrap()),
+            TransferFormat::Binary => HubProtocolInput::Binary(&frame),
+        };
+        let ctx = test_dispatch_context(connection.bus.clone());
+        for parsed in protocol.parse_messages(input).unwrap() {
+            ctx.dispatch(parsed).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn on_typed_receives_arguments_in_every_protocol() {
+        let protocols: Vec<Arc<dyn crate::hub::protocol::HubProtocol>> = vec![
+            Arc::new(JsonProtocol),
+            #[cfg(feature = "messagepack")]
+            Arc::new(MessagePackProtocol),
+            #[cfg(feature = "messagepack-brotli")]
+            Arc::new(crate::hub::MessagePackBrotliProtocol::default()),
+        ];
+        for protocol in protocols {
+            let connection =
+                HubConnection::new(ConnectionOptions::new("https://example.com/signalr"));
+            let received = Arc::new(std::sync::Mutex::new(Vec::new()));
+            connection
+                .on_typed("move", {
+                    let received = received.clone();
+                    move |arguments: (String, Point)| received.lock().unwrap().push(arguments)
+                })
+                .await;
+
+            let message = point_invocation(vec![
+                Value::from("a"),
+                serde_json::json!({ "x": 1, "y": 2.5 }),
+            ]);
+            dispatch_through(protocol.as_ref(), &connection, &message).await;
+
+            assert_eq!(
+                *received.lock().unwrap(),
+                [("a".to_string(), Point { x: 1, y: 2.5 })],
+                "{}",
+                protocol.name()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn on_typed_reports_arguments_of_wrong_shape() {
+        let connection = HubConnection::new(ConnectionOptions::new("https://example.com/signalr"));
+        let called = Arc::new(AtomicBool::new(false));
+        connection
+            .on_typed("Move", {
+                let called = called.clone();
+                move |_: (String, Point)| called.store(true, Ordering::Relaxed)
+            })
+            .await;
+
+        let handlers = connection.bus.handlers_for("Move").await;
+        let output = handlers[0](vec![Value::from(1)].into())
+            .await_output()
+            .await;
+
+        assert!(!called.load(Ordering::Relaxed));
+        let error = output.unwrap_err();
+        assert!(error.starts_with("invalid invocation arguments"), "{error}");
+        // The connection goes on: dispatch itself does not fail.
+        test_dispatch_context(connection.bus.clone())
+            .dispatch(point_invocation(vec![Value::from(1)]))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn on_typed_and_on_share_a_method() {
+        let connection = HubConnection::new(ConnectionOptions::new("https://example.com/signalr"));
+        let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        for name in ["typed 1", "typed 2"] {
+            let calls = calls.clone();
+            connection
+                .on_typed("Move", move |(_, point): (String, Point)| {
+                    calls.lock().unwrap().push(format!("{name}: {}", point.x));
+                })
+                .await;
+        }
+        connection
+            .on("Move", {
+                let calls = calls.clone();
+                move |arguments| {
+                    calls
+                        .lock()
+                        .unwrap()
+                        .push(format!("json: {}", arguments[1]["x"]));
+                    None
+                }
+            })
+            .await;
+
+        let message = point_invocation(vec![
+            Value::from("a"),
+            serde_json::json!({ "x": 7, "y": 0.5 }),
+        ]);
+        #[cfg(feature = "messagepack")]
+        dispatch_through(&MessagePackProtocol, &connection, &message).await;
+        #[cfg(not(feature = "messagepack"))]
+        dispatch_through(&JsonProtocol, &connection, &message).await;
+
+        assert_eq!(
+            *calls.lock().unwrap(),
+            ["typed 1: 7", "typed 2: 7", "json: 7"]
+        );
     }
 
     #[tokio::test]
@@ -888,7 +1080,7 @@ mod tests {
             "Echo".into(),
             Arc::new(move |arguments| {
                 called_clone.store(true, Ordering::Relaxed);
-                ClientMethodOutput::ready(Ok(arguments.first().cloned()))
+                ClientMethodOutput::ready(Ok(arguments.to_json().unwrap().first().cloned()))
             }),
         )
         .await;
@@ -899,7 +1091,7 @@ mod tests {
             headers: Default::default(),
             invocation_id: Some("1".into()),
             target: "Echo".into(),
-            arguments: vec![Value::String("hello".into())],
+            arguments: vec![Value::String("hello".into())].into(),
             stream_ids: None,
         }))
         .await
@@ -944,7 +1136,7 @@ mod tests {
             headers: Default::default(),
             invocation_id: None,
             target: "Notify".into(),
-            arguments: vec![],
+            arguments: Default::default(),
             stream_ids: None,
         }))
         .await
@@ -985,7 +1177,7 @@ mod tests {
             headers: Default::default(),
             invocation_id: Some("1".into()),
             target: "Echo".into(),
-            arguments: vec![],
+            arguments: Default::default(),
             stream_ids: None,
         }))
         .await
@@ -1026,7 +1218,7 @@ mod tests {
             headers: Default::default(),
             invocation_id: Some("1".into()),
             target: "Echo".into(),
-            arguments: vec![],
+            arguments: Default::default(),
             stream_ids: None,
         }))
         .await

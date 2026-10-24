@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use tokio::sync::RwLock;
 
 use crate::error::Error;
+use crate::hub::arguments::Arguments;
 
 /// Error message used when pending invocations are canceled due to connection loss.
 pub const INVOCATION_CANCELED_MESSAGE: &str =
@@ -51,7 +52,7 @@ impl ClientMethodOutput {
 }
 
 /// Handler invoked when the server calls a client hub method.
-pub type ClientMethodHandler = Arc<dyn Fn(Vec<Value>) -> ClientMethodOutput + Send + Sync>;
+pub type ClientMethodHandler = Arc<dyn Fn(Arguments) -> ClientMethodOutput + Send + Sync>;
 
 struct RegisteredClientHandler {
     id: u64,
@@ -218,7 +219,7 @@ mod tests {
         bus.register_handler(
             target.clone(),
             Arc::new(move |received_args| {
-                assert_eq!(received_args, args_clone);
+                assert_eq!(received_args.to_json().unwrap(), args_clone);
                 called_clone.store(true, Ordering::Relaxed);
                 ClientMethodOutput::ready(Ok(None))
             }),
@@ -227,7 +228,7 @@ mod tests {
 
         let handlers = bus.handlers_for(&target).await;
         assert_eq!(handlers.len(), 1);
-        let _ = handlers[0](args).await_output().await;
+        let _ = handlers[0](args.into()).await_output().await;
         assert!(called.load(Ordering::Relaxed));
     }
 
@@ -290,7 +291,7 @@ mod tests {
 
         let handlers = bus.handlers_for("Event").await;
         assert_eq!(handlers.len(), 1);
-        let _ = handlers[0](Vec::new()).await_output().await;
+        let _ = handlers[0](Arguments::default()).await_output().await;
         assert!(keep.load(Ordering::Relaxed));
     }
 

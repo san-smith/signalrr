@@ -47,6 +47,11 @@ pub enum Error {
 
     #[error("protocol error: {0}")]
     Protocol(String),
+
+    /// Invocation arguments do not match the type requested from
+    /// [`crate::Arguments::deserialize`].
+    #[error("invalid invocation arguments: {0}")]
+    InvalidArguments(String),
 }
 
 /// Errors during text/binary message framing.

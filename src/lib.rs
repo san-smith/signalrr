@@ -46,9 +46,9 @@ pub use handshake::{
 #[cfg(feature = "messagepack")]
 pub use hub::MessagePackProtocol;
 pub use hub::{
-    AckMessage, CancelInvocationMessage, CloseMessage, CompletionMessage, HubMessage, HubProtocol,
-    HubProtocolInput, InvocationMessage, JsonProtocol, MessageType, PingMessage, ProtocolError,
-    SequenceMessage, StreamInvocationMessage, StreamItemMessage,
+    AckMessage, Arguments, CancelInvocationMessage, CloseMessage, CompletionMessage, HubMessage,
+    HubProtocol, HubProtocolInput, InvocationMessage, JsonProtocol, MessageType, PingMessage,
+    ProtocolError, SequenceMessage, StreamInvocationMessage, StreamItemMessage,
 };
 #[cfg(feature = "messagepack-brotli")]
 pub use hub::{BrotliDecoder, DefaultBrotliDecoder, MessagePackBrotliProtocol};

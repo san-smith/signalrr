@@ -174,7 +174,7 @@ async fn main() -> Result<(), BoxError> {
                     let invocation = HubMessage::Invocation(InvocationMessage {
                         invocation_id: call.invocation_id,
                         target: call.method,
-                        arguments: call.args,
+                        arguments: call.args.into(),
                         ..Default::default()
                     });
                     send(&transport, protocol.as_ref(), &invocation).await?;
@@ -292,7 +292,10 @@ impl Recorder {
 
         match self.protocol.parse_messages(input) {
             Ok(messages) => {
-                let json: Vec<_> = messages.iter().map(HubMessage::to_json_value).collect();
+                let json = messages
+                    .iter()
+                    .map(HubMessage::to_json_value)
+                    .collect::<Result<Vec<_>, _>>()?;
                 std::fs::write(
                     with_suffix(base, "messages.json"),
                     serde_json::to_vec_pretty(&json)?,
