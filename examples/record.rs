@@ -112,7 +112,7 @@ async fn main() -> Result<(), BoxError> {
     );
     let ack_messages = stateful && negotiated.response.use_stateful_reconnect == Some(true);
     let websocket_url = build_websocket_url(
-        &url,
+        &negotiated.url,
         negotiated.response.websocket_token()?,
         negotiated.access_token.as_deref(),
     )?;

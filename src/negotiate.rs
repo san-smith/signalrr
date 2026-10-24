@@ -50,6 +50,8 @@ impl NegotiateResponse {
 pub struct NegotiateResult {
     pub response: NegotiateResponse,
     pub access_token: Option<String>,
+    /// Hub URL the transport connects to: the original one or the last redirect.
+    pub url: String,
 }
 
 /// Options for the negotiate request.
@@ -193,6 +195,7 @@ async fn negotiate_with_source(
             return Ok(NegotiateResult {
                 response,
                 access_token: token.into_token(),
+                url: current_url,
             });
         };
 

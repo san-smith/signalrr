@@ -89,6 +89,7 @@ impl Connection {
         let NegotiateResult {
             response,
             access_token,
+            url,
         } = {
             let client = match options.http_client.clone() {
                 Some(client) => client,
@@ -107,11 +108,7 @@ impl Connection {
 
         let connection_token = response.websocket_token()?.to_string();
         let connection_id = response.connection_id.clone();
-        let websocket_url = build_websocket_url(
-            &options.base_url,
-            &connection_token,
-            access_token.as_deref(),
-        )?;
+        let websocket_url = build_websocket_url(&url, &connection_token, access_token.as_deref())?;
 
         debug!(url = %websocket_url, "starting websocket transport");
         // `build_websocket_url` has already put the token into the URL.
