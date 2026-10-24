@@ -138,9 +138,10 @@ fn create_invocation_message(
     }
 
     let is_compressed = data.get(4).and_then(|value| value.as_i64()) == Some(1);
-    let arguments = unpack_data(data.get(5), is_compressed, decoder)?
-        .map(|value| value_to_json_array(&value).unwrap_or_default())
-        .unwrap_or_default();
+    let arguments = match unpack_data(data.get(5), is_compressed, decoder)? {
+        Some(value) => value_to_json_array(&value)?,
+        None => Vec::new(),
+    };
 
     Ok(InvocationMessage {
         headers: create_message_headers(data)?,
@@ -162,9 +163,10 @@ fn create_stream_invocation_message(
     }
 
     let is_compressed = data.get(4).and_then(|value| value.as_i64()) == Some(1);
-    let arguments = unpack_data(data.get(5), is_compressed, decoder)?
-        .map(|value| value_to_json_array(&value).unwrap_or_default())
-        .unwrap_or_default();
+    let arguments = match unpack_data(data.get(5), is_compressed, decoder)? {
+        Some(value) => value_to_json_array(&value)?,
+        None => Vec::new(),
+    };
 
     Ok(StreamInvocationMessage {
         headers: create_message_headers(data)?,
