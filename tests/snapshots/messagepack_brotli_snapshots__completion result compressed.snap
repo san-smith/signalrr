@@ -1,0 +1,21 @@
+---
+source: tests/messagepack_brotli_snapshots.rs
+expression: parse(&frame(items))
+---
+[
+    Completion(
+        CompletionMessage {
+            headers: {},
+            invocation_id: "1",
+            error: None,
+            result: Some(
+                Array [
+                    String("price"),
+                    Object {
+                        "7": Number(1.25),
+                    },
+                ],
+            ),
+        },
+    ),
+]

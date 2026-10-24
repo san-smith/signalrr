@@ -1,0 +1,6 @@
+---
+source: tests/messagepack_brotli_snapshots.rs
+expression: "format!(\"stateful: {:?}\\nwithout stateful: {:?}\", request(true),\nrequest(false))"
+---
+stateful: HandshakeRequest { protocol: "messagepack+brotli", version: 2 }
+without stateful: HandshakeRequest { protocol: "messagepack+brotli", version: 1 }

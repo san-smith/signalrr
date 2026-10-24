@@ -1,0 +1,16 @@
+---
+source: tests/messagepack_brotli_snapshots.rs
+expression: parse(&frame(items))
+---
+[
+    Close(
+        CloseMessage {
+            error: Some(
+                "bye",
+            ),
+            allow_reconnect: Some(
+                true,
+            ),
+        },
+    ),
+]

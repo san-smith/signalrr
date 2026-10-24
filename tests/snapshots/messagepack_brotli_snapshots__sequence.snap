@@ -1,0 +1,11 @@
+---
+source: tests/messagepack_brotli_snapshots.rs
+expression: parse(&frame(items))
+---
+[
+    Sequence(
+        SequenceMessage {
+            sequence_id: 4,
+        },
+    ),
+]

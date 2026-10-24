@@ -1,0 +1,22 @@
+---
+source: tests/messagepack_brotli_snapshots.rs
+expression: parse(&frame)
+---
+[
+    Invocation(
+        InvocationMessage {
+            headers: {},
+            invocation_id: None,
+            target: "update",
+            arguments: [
+                String("price"),
+                Object {
+                    "7": Number(1.25),
+                },
+            ],
+            stream_ids: Some(
+                [],
+            ),
+        },
+    ),
+]

@@ -1,0 +1,9 @@
+---
+source: tests/messagepack_brotli_snapshots.rs
+expression: parse(&frame(items))
+---
+[
+    Ping(
+        PingMessage,
+    ),
+]

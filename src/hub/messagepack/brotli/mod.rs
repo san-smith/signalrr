@@ -107,28 +107,8 @@ impl HubProtocol for MessagePackBrotliProtocol {
 
 #[cfg(test)]
 mod tests {
-    use base64::Engine;
-    use base64::engine::general_purpose::STANDARD;
-
     use super::*;
     use crate::hub::message::InvocationMessage;
-
-    #[test]
-    fn parse_messages_decodes_real_update_state_payload() {
-        let payload = STANDARD.decode(
-            "lQKXAYDAq3VwZGF0ZVN0YXRl0ACRgqF0tG1haW4tcGFnZS1tYWluLXN0YWtloWSLoXLCoXOAonR1gKJ0b4CidHOAoW+AoW2BzgAYjGPeAB2hac4AGIxjoXPAonR1wKJ0b8CidHPAonNrwKJhc8ChdMCiaXTAomNswKJtdMCiaW/Ao3N0c8ChZMChbsCidG3Ao3N0YcChYcCic2PAoXDAoW/AonN0wKJyc8ChYoLOd0dzb4Khac53R3NvonAyzInOd0dzcIKhac53R3NwonAyzQEeonJiwKJiY26ibWPAoWfAom1uwKJybZCiaWXConN0vDIwMjUtMDYtMjBUMTI6NDY6MzkuNzAwNjk5Nlqjc3QyzgpJdy+Q",
-        ).unwrap();
-
-        let messages = MessagePackBrotliProtocol::default()
-            .parse_messages(HubProtocolInput::Binary(&payload))
-            .unwrap();
-
-        assert_eq!(messages.len(), 1);
-        assert!(matches!(messages[0], HubMessage::Invocation(_)));
-        if let HubMessage::Invocation(InvocationMessage { target, .. }) = &messages[0] {
-            assert_eq!(target, "updateState");
-        }
-    }
 
     #[test]
     fn round_trip_uncompressed_invocation() {

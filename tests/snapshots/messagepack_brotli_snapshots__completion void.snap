@@ -1,0 +1,14 @@
+---
+source: tests/messagepack_brotli_snapshots.rs
+expression: parse(&frame(items))
+---
+[
+    Completion(
+        CompletionMessage {
+            headers: {},
+            invocation_id: "1",
+            error: None,
+            result: None,
+        },
+    ),
+]

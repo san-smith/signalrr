@@ -1,0 +1,5 @@
+---
+source: tests/messagepack_brotli_snapshots.rs
+expression: parse(&frame)
+---
+error: invalid payload: expected array
