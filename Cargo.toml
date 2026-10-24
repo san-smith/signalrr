@@ -42,3 +42,7 @@ wiremock = "0.6"
 [[example]]
 name = "connect"
 required-features = []
+
+[[example]]
+name = "record"
+required-features = ["messagepack-brotli"]

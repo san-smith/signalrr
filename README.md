@@ -90,6 +90,22 @@ async fn main() -> Result<(), signalrr::Error> {
 }
 ```
 
+## Recording frames
+
+`examples/record.rs` connects to any hub, sends the invocations listed in a JSON file and
+writes every incoming frame to disk: the raw frame, the parsed messages as JSON and, for
+`messagepack+brotli`, the decompressed payloads. Use it to inspect a server or to collect
+test fixtures.
+
+```bash
+echo '[{"method": "Subscribe", "args": ["prices"]}]' > calls.json
+SIGNALR_URL=https://example.com/hub SIGNALR_PROTOCOL=messagepack ACCESS_TOKEN=... \
+SIGNALR_CALLS=calls.json SIGNALR_OUT=frames SIGNALR_DURATION_SECS=30 \
+    cargo run --example record --features messagepack-brotli
+```
+
+The doc comment at the top of the example lists all settings and output files.
+
 ## Development
 
 CI (GitHub Actions) runs rustfmt, clippy with `-D warnings` and the test suite on Linux, macOS

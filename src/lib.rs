@@ -59,8 +59,8 @@ pub use hub_connection::{
     RetryPolicy, TransportCloseInfo,
 };
 pub use negotiate::{
-    NegotiateOptions, NegotiateResponse, NegotiateResult, negotiate, negotiate_with_client,
-    negotiate_with_token_factory,
+    NegotiateOptions, NegotiateResponse, NegotiateResult, build_websocket_url, negotiate,
+    negotiate_with_client, negotiate_with_token_factory,
 };
 pub use transport::{
     TransferFormat, TransportMessage, TransportSendQueue, WebSocketConnectOptions,
