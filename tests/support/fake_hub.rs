@@ -15,6 +15,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::io::Write as _;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -62,6 +63,8 @@ pub struct FakeHub {
     replies: Arc<Mutex<VecDeque<NegotiateReply>>>,
     requests: Arc<Mutex<Vec<NegotiateRequest>>>,
     connections: tokio::sync::Mutex<mpsc::UnboundedReceiver<ServerConnection>>,
+    refuse_websockets: Arc<AtomicBool>,
+    refused_tokens: Arc<Mutex<Vec<String>>>,
 }
 
 impl FakeHub {
@@ -71,10 +74,14 @@ impl FakeHub {
         let replies = Arc::new(Mutex::new(VecDeque::new()));
         let requests = Arc::new(Mutex::new(Vec::new()));
         let (connections_tx, connections) = mpsc::unbounded_channel();
+        let refuse_websockets = Arc::new(AtomicBool::new(false));
+        let refused_tokens: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
         tokio::spawn({
             let replies = replies.clone();
             let requests = requests.clone();
+            let refuse_websockets = refuse_websockets.clone();
+            let refused_tokens = refused_tokens.clone();
             async move {
                 let mut tokens = 0;
                 while let Ok((stream, _)) = listener.accept().await {
@@ -87,10 +94,16 @@ impl FakeHub {
                         let reply = replies.lock().unwrap().pop_front();
                         let token = format!("token-{tokens}");
                         tokio::spawn(negotiate(stream, reply, token, requests.clone()));
+                    } else if refuse_websockets.load(Ordering::SeqCst) {
+                        drop(stream);
                     } else {
                         let connections_tx = connections_tx.clone();
+                        let refused_tokens = refused_tokens.clone();
                         tokio::spawn(async move {
-                            if let Some(connection) = ServerConnection::accept(stream).await {
+                            let refused = refused_tokens.lock().unwrap().clone();
+                            if let Some(connection) =
+                                ServerConnection::accept(stream, &refused).await
+                            {
                                 let _ = connections_tx.send(connection);
                             }
                         });
@@ -105,6 +118,8 @@ impl FakeHub {
             replies,
             requests,
             connections: tokio::sync::Mutex::new(connections),
+            refuse_websockets,
+            refused_tokens,
         }
     }
 
@@ -112,6 +127,17 @@ impl FakeHub {
     /// [`NegotiateReply::Ok`].
     pub fn reply_to_negotiate(&self, reply: NegotiateReply) {
         self.replies.lock().unwrap().push_back(reply);
+    }
+
+    /// Rejects the WebSocket upgrade for this connection token, as a server does for a
+    /// connection it no longer knows.
+    pub fn refuse_connection_token(&self, token: &str) {
+        self.refused_tokens.lock().unwrap().push(token.to_string());
+    }
+
+    /// Drops every further WebSocket connection before the upgrade.
+    pub fn refuse_websockets(&self) {
+        self.refuse_websockets.store(true, Ordering::SeqCst);
     }
 
     pub fn negotiate_requests(&self) -> Vec<NegotiateRequest> {
@@ -206,9 +232,18 @@ pub struct ServerConnection {
 }
 
 impl ServerConnection {
-    async fn accept(stream: TcpStream) -> Option<Self> {
+    async fn accept(stream: TcpStream, refused_tokens: &[String]) -> Option<Self> {
         let mut uri = None;
         let ws = tokio_tungstenite::accept_hdr_async(stream, |request: &Request, response| {
+            let query = request.uri().query().unwrap_or("");
+            let refused = url::form_urlencoded::parse(query.as_bytes())
+                .any(|(key, value)| key == "id" && refused_tokens.iter().any(|t| *t == value));
+            if refused {
+                let mut not_found = tokio_tungstenite::tungstenite::http::Response::new(None);
+                *not_found.status_mut() =
+                    tokio_tungstenite::tungstenite::http::StatusCode::NOT_FOUND;
+                return Err(not_found);
+            }
             uri = Some(request.uri().clone());
             Ok::<Response, _>(response)
         })
@@ -250,13 +285,19 @@ impl ServerConnection {
             .strip_suffix(RECORD_SEPARATOR)
             .expect("handshake ends with the record separator");
         let request: Value = serde_json::from_str(request).unwrap();
-        self.protocol = Some(match request["protocol"].as_str().unwrap() {
+        self.assume_protocol(request["protocol"].as_str().unwrap());
+        request
+    }
+
+    /// Sets the hub protocol without a handshake, for a transport that resumes an existing
+    /// connection (stateful reconnect).
+    pub fn assume_protocol(&mut self, name: &str) {
+        self.protocol = Some(match name {
             "json" => Arc::new(JsonProtocol),
             "messagepack" => Arc::new(MessagePackProtocol),
             "messagepack+brotli" => Arc::new(MessagePackBrotliProtocol::default()),
             other => panic!("unknown protocol {other}"),
         });
-        request
     }
 
     /// Answers the handshake: `{}` or `{"error": ...}`.

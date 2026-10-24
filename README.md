@@ -24,7 +24,9 @@ Implemented:
 - server timeout (30s) and keepalive ping (15s)
 - custom `messagepack+brotli` hub protocol (feature `messagepack-brotli`)
 - automatic reconnect with configurable [`RetryPolicy`](https://docs.rs/signalrr/latest/signalrr/trait.RetryPolicy.html)
-- stateful reconnect with message buffering (`with_stateful_reconnect()`)
+- stateful reconnect (`with_stateful_reconnect()`): after a transport drop the same
+  connection resumes over a new WebSocket and unacknowledged messages are resent, without
+  a new negotiate and without reconnect callbacks
 - streaming hub invocations (`stream()` / `StreamInvocation`)
 - automatic handshake version selection (legacy v1 without stateful reconnect, hub protocol v2 with stateful reconnect)
 - lifecycle callbacks: `on_close`, `on_reconnecting`, `on_reconnected`

@@ -374,3 +374,27 @@ async fn server_pings_prevent_the_timeout() {
     assert_eq!(connection.state().await, HubConnectionState::Connected);
     connection.close().await.unwrap();
 }
+
+#[tokio::test]
+async fn consecutive_sends_arrive_in_order() {
+    let hub = FakeHub::start().await;
+    let connection = HubConnection::builder(&hub.url)
+        .with_messagepack_protocol()
+        .build();
+    let mut server = connect(&hub, &connection).await;
+
+    for n in 0..100 {
+        connection
+            .send("Item", vec![json!(n).into()])
+            .await
+            .unwrap();
+    }
+
+    for n in 0..100 {
+        let HubMessage::Invocation(item) = server.recv().await else {
+            panic!("expected an invocation");
+        };
+        assert_eq!(item.arguments.to_json().unwrap(), [json!(n)]);
+    }
+    connection.close().await.unwrap();
+}
