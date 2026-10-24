@@ -165,7 +165,10 @@ impl Connection {
             _ => None,
         };
 
-        debug!(url = %websocket_url, "starting websocket transport");
+        debug!(
+            url = %crate::transport::redact_access_token(&websocket_url),
+            "starting websocket transport"
+        );
         // `build_websocket_url` has already put the token into the URL.
         let (mut transport, mut incoming) = WebSocketTransport::connect_with_options(
             &websocket_url,

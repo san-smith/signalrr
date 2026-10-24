@@ -67,7 +67,8 @@ impl WebSocketTransport {
         options: WebSocketConnectOptions,
     ) -> Result<(Self, mpsc::UnboundedReceiver<TransportMessage>), Error> {
         let target_url = super::append_access_token(url, access_token)?;
-        debug!(url = %target_url, "connecting websocket");
+        let logged_url = super::redact_access_token(&target_url);
+        debug!(url = %logged_url, "connecting websocket");
 
         let request = target_url
             .as_str()
@@ -77,7 +78,7 @@ impl WebSocketTransport {
             error!(?error, "websocket connection failed");
             Error::WebSocket(Box::new(error))
         })?;
-        info!(url = %target_url, "websocket connected");
+        info!(url = %logged_url, "websocket connected");
 
         let (write, read) = ws_stream.split();
         let sender = Arc::new(Mutex::new(write));

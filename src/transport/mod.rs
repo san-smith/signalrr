@@ -27,6 +27,29 @@ pub(crate) fn append_access_token(url: &str, access_token: Option<&str>) -> Resu
     Ok(parsed.to_string())
 }
 
+/// `url` for logs: the value of `access_token` is replaced with `***`.
+pub(crate) fn redact_access_token(url: &str) -> String {
+    let Ok(mut parsed) = url::Url::parse(url) else {
+        return "<unparsable url>".into();
+    };
+    if !parsed.query_pairs().any(|(key, _)| key == "access_token") {
+        return url.to_string();
+    }
+    let pairs: Vec<(String, String)> = parsed
+        .query_pairs()
+        .map(|(key, value)| {
+            let value = if key == "access_token" {
+                "***".to_string()
+            } else {
+                value.into_owned()
+            };
+            (key.into_owned(), value)
+        })
+        .collect();
+    parsed.query_pairs_mut().clear().extend_pairs(pairs);
+    parsed.to_string()
+}
+
 pub(crate) fn format_data_detail(data: &TransportPayloadDetail, include_content: bool) -> String {
     match data {
         TransportPayloadDetail::Text(text) => {
@@ -57,7 +80,22 @@ pub(crate) enum TransportPayloadDetail<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{TransportPayloadDetail, format_data_detail};
+    use super::{TransportPayloadDetail, format_data_detail, redact_access_token};
+
+    #[test]
+    fn redact_access_token_hides_only_the_token() {
+        let url = "wss://host/hub?cashboxId=1&id=abc&access_token=secret.jwt";
+        let redacted = redact_access_token(url);
+        assert!(!redacted.contains("secret"), "{redacted}");
+        assert!(
+            redacted.contains("access_token=***") || redacted.contains("access_token=%2A%2A%2A")
+        );
+        assert!(redacted.contains("id=abc") && redacted.contains("cashboxId=1"));
+        assert_eq!(
+            redact_access_token("wss://host/hub?id=abc"),
+            "wss://host/hub?id=abc"
+        );
+    }
 
     #[test]
     fn format_data_detail_hides_content_by_default() {
