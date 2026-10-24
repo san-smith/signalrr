@@ -33,8 +33,9 @@ The crate is developed, not rewritten.
    them with `rmp-serde`. On a 7 MB synthetic invocation (`benches/typed_receive.rs`) it is
    25 ms instead of 246 ms through `serde_json::Value`.
 4. **Integration harness.** An in-process fake hub on `tokio_tungstenite::accept_async`
-   covering negotiate, handshake, connection drop, reconnect and stateful reconnect. Only
-   unit tests exist now.
+   covering negotiate, handshake, connection drop, reconnect and stateful reconnect. The
+   hub (`tests/support/fake_hub.rs`) and the connect scenarios (`tests/connect.rs`) are in
+   since 2026-10-24; connection drop and reconnect scenarios are next.
 5. **`HubConnection` refactor.** Eight `Arc<RwLock<Option<...>>>` fields become one state
    behind one lock, or commands sent to a runtime task. A good task for an external
    reviewer.
