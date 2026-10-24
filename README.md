@@ -120,6 +120,36 @@ SIGNALR_CALLS=calls.json SIGNALR_OUT=frames SIGNALR_DURATION_SECS=30 \
 
 The doc comment at the top of the example lists all settings and output files.
 
+## Testing your code against a fake hub
+
+The `test-support` feature adds `signalrr::test_support`: an in-process hub on a random
+local port that answers negotiate and accepts the WebSocket, and lets a test script the
+server side: what negotiate returns, the handshake answer, messages to send, what the client
+sent, closing or dropping the connection. No network is needed.
+
+```toml
+[dev-dependencies]
+signalrr = { version = "...", features = ["test-support"] }
+```
+
+```rust
+use signalrr::HubConnection;
+use signalrr::test_support::FakeHub;
+
+let hub = FakeHub::start().await;
+let connection = HubConnection::builder(&hub.url).with_json_protocol().build();
+let (started, mut server) = tokio::join!(connection.start(), async {
+    let mut server = hub.accept().await;
+    server.handshake().await;
+    server
+});
+started?;
+// server.send(...), server.recv().await, server.abort(), hub.reply_to_negotiate(...)
+```
+
+The fake hub panics on anything unexpected, which fails the test that drives it. The tests of
+this crate (`tests/connect.rs`, `tests/reconnect.rs`) use it the same way.
+
 ## Development
 
 CI (GitHub Actions) runs rustfmt, clippy with `-D warnings` and the test suite on Linux, macOS

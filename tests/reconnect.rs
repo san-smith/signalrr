@@ -1,19 +1,16 @@
 //! Connection drops against an in-process hub: automatic reconnect, no reconnect, pending
 //! invocations and stateful reconnect.
 
-#![cfg(feature = "messagepack-brotli")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
-
-mod support;
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::json;
+use signalrr::test_support::{FakeHub, NegotiateReply, ServerConnection, TIMEOUT};
 use signalrr::{
     DefaultReconnectPolicy, HubConnection, HubConnectionState, HubMessage, InvocationMessage,
 };
-use support::fake_hub::{FakeHub, NegotiateReply, ServerConnection, TIMEOUT};
 use tokio::sync::mpsc;
 
 /// Reconnect delays short enough for the test not to wait.

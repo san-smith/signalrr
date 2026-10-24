@@ -1,10 +1,7 @@
 //! Connecting and exchanging messages with an in-process hub: negotiate, handshake, calls
 //! in both directions, server close, keep-alive and server timeout.
 
-#![cfg(feature = "messagepack-brotli")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
-
-mod support;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -12,11 +9,11 @@ use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::json;
+use signalrr::test_support::{FakeHub, NegotiateReply, ServerConnection, TIMEOUT};
 use signalrr::{
     CloseMessage, CompletionMessage, Error, HubConnection, HubConnectionBuilder,
     HubConnectionState, HubMessage, InvocationMessage,
 };
-use support::fake_hub::{FakeHub, NegotiateReply, ServerConnection, TIMEOUT};
 use tokio::sync::mpsc;
 
 type Builder = fn(&str) -> HubConnectionBuilder;
@@ -193,7 +190,7 @@ async fn compressed_server_invocation_reaches_on_typed() {
         (rmpv::Value::from("y"), rmpv::Value::from(2.5)),
     ]);
     server
-        .send_binary(support::fake_hub::compressed_invocation(
+        .send_binary(signalrr::test_support::compressed_invocation(
             "Update",
             rmpv::Value::Array(vec![rmpv::Value::from("a"), point]),
         ))

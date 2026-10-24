@@ -22,6 +22,7 @@ feature_sets=(
     "--no-default-features --features json"
     "--no-default-features --features messagepack"
     "--no-default-features --features messagepack-brotli"
+    "--no-default-features --features json,test-support"
     ""
 )
 for features in "${feature_sets[@]}"; do

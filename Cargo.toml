@@ -13,6 +13,8 @@ default = ["json", "messagepack"]
 json = []
 messagepack = ["dep:rmp", "dep:rmpv", "dep:rmp-serde"]
 messagepack-brotli = ["messagepack", "dep:brotli"]
+# In-process fake hub for tests of code built on this client (`signalrr::test_support`).
+test-support = ["tokio/io-util"]
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
@@ -53,3 +55,11 @@ required-features = ["messagepack-brotli"]
 name = "typed_receive"
 harness = false
 required-features = ["messagepack-brotli"]
+
+[[test]]
+name = "connect"
+required-features = ["messagepack-brotli", "test-support"]
+
+[[test]]
+name = "reconnect"
+required-features = ["messagepack-brotli", "test-support"]

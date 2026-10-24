@@ -30,6 +30,8 @@ mod transport;
 
 pub mod builder;
 pub mod hub_connection;
+#[cfg(feature = "test-support")]
+pub mod test_support;
 
 pub use access_token::{AccessTokenFactory, factory as access_token_factory};
 pub use builder::HubConnectionBuilder;

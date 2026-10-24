@@ -1,37 +1,56 @@
-//! In-process SignalR hub for integration tests.
+//! In-process SignalR hub for tests of code built on this client (feature `test-support`).
 //!
 //! One TCP port serves both negotiate (a minimal HTTP/1.1 responder) and the WebSocket
 //! (`accept_hdr_async`). The test decides what negotiate answers, takes every accepted
 //! WebSocket as a [`ServerConnection`] and drives it: handshake, frames to send, frames the
 //! client sent, close or abort.
+//!
+//! ```no_run
+//! # async fn example() -> Result<(), signalrr::Error> {
+//! use signalrr::HubConnection;
+//! use signalrr::test_support::FakeHub;
+//!
+//! let hub = FakeHub::start().await;
+//! let connection = HubConnection::builder(&hub.url).with_json_protocol().build();
+//! let (started, mut server) = tokio::join!(connection.start(), async {
+//!     let mut server = hub.accept().await;
+//!     server.handshake().await;
+//!     server
+//! });
+//! started?;
+//! let message = server.recv().await; // what the client sent
+//! # let _ = message;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! This is test scaffolding: on anything unexpected (the client stays silent past
+//! [`TIMEOUT`], sends a malformed frame, closes early) it panics with a message, which fails
+//! the test that drives it.
 
-// `result_large_err`: the `accept_hdr_async` callback signature comes from tungstenite.
-#![allow(
-    dead_code,
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::result_large_err
-)]
+// Panicking is how the fake hub fails a test. `result_large_err`: the `accept_hdr_async`
+// callback signature comes from tungstenite.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::result_large_err)]
 
 use std::collections::{HashMap, VecDeque};
+#[cfg(feature = "messagepack-brotli")]
 use std::io::Write as _;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use rmpv::Value as MsgValue;
 use serde_json::{Value, json};
-use signalrr::{
-    BinaryMessageFormat, HubMessage, HubProtocol, HubProtocolInput, JsonProtocol,
-    MessagePackBrotliProtocol, MessagePackProtocol, RECORD_SEPARATOR,
-};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
+
+#[cfg(feature = "messagepack-brotli")]
+use crate::BinaryMessageFormat;
+use crate::{HubMessage, HubProtocol, HubProtocolInput, JsonProtocol, RECORD_SEPARATOR};
 
 /// How long a test waits for the client before failing.
 pub const TIMEOUT: Duration = Duration::from_secs(5);
@@ -294,8 +313,10 @@ impl ServerConnection {
     pub fn assume_protocol(&mut self, name: &str) {
         self.protocol = Some(match name {
             "json" => Arc::new(JsonProtocol),
-            "messagepack" => Arc::new(MessagePackProtocol),
-            "messagepack+brotli" => Arc::new(MessagePackBrotliProtocol::default()),
+            #[cfg(feature = "messagepack")]
+            "messagepack" => Arc::new(crate::MessagePackProtocol),
+            #[cfg(feature = "messagepack-brotli")]
+            "messagepack+brotli" => Arc::new(crate::MessagePackBrotliProtocol::default()),
             other => panic!("unknown protocol {other}"),
         });
     }
@@ -392,8 +413,8 @@ impl ServerConnection {
         let protocol = self.protocol.clone().expect("handshake first");
         let bytes = protocol.write_message(message).unwrap();
         let frame = match protocol.transfer_format() {
-            signalrr::TransferFormat::Text => Message::Text(String::from_utf8(bytes).unwrap()),
-            signalrr::TransferFormat::Binary => Message::Binary(bytes),
+            crate::TransferFormat::Text => Message::Text(String::from_utf8(bytes).unwrap()),
+            crate::TransferFormat::Binary => Message::Binary(bytes),
         };
         self.send_frame(frame).await;
     }
@@ -431,7 +452,10 @@ fn is_ping_or_close(message: &HubMessage) -> bool {
 
 /// A `messagepack+brotli` invocation frame with the arguments brotli-compressed, the way
 /// the server sends large payloads.
-pub fn compressed_invocation(target: &str, arguments: MsgValue) -> Vec<u8> {
+#[cfg(feature = "messagepack-brotli")]
+pub fn compressed_invocation(target: &str, arguments: rmpv::Value) -> Vec<u8> {
+    use rmpv::Value as MsgValue;
+
     let encode = |value: &MsgValue| {
         let mut bytes = Vec::new();
         rmpv::encode::write_value(&mut bytes, value).unwrap();
