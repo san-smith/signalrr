@@ -19,6 +19,11 @@ use crate::transport::{TransferFormat, TransportMessage, WebSocketTransport};
 pub const DEFAULT_SERVER_TIMEOUT: Duration = Duration::from_secs(30);
 pub const DEFAULT_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(15);
 
+/// Close reason reported when the server sends nothing for the server timeout, as in the
+/// official clients.
+const SERVER_TIMEOUT_MESSAGE: &str =
+    "Server timeout elapsed without receiving a message from the server.";
+
 /// Event emitted when the transport closes unexpectedly.
 #[derive(Debug, Clone)]
 pub enum TransportEvent {
@@ -91,6 +96,8 @@ impl HubRuntime {
         let receive_buffer = message_buffer.clone();
         let transport_close_signaled = Arc::new(AtomicBool::new(false));
         let receive_close_signaled = transport_close_signaled.clone();
+        let keepalive_close_signaled = transport_close_signaled.clone();
+        let keepalive_events = transport_events.clone();
 
         let receive_task = tokio::spawn(async move {
             let dispatch = DispatchContext {
@@ -159,23 +166,18 @@ impl HubRuntime {
             }
         });
 
-        let keepalive_transport = transport.clone();
-        let keepalive_protocol = hub_protocol.clone();
-        let keepalive_activity = activity.clone();
-        let keepalive_shutdown = shutdown_rx;
-
-        let keepalive_task = tokio::spawn(async move {
-            run_keepalive(
-                keepalive_shutdown,
-                keepalive_activity,
-                keepalive_transport,
-                keepalive_protocol,
-                transfer_format,
-                server_timeout,
-                keep_alive_interval,
-            )
-            .await;
-        });
+        let keepalive = Keepalive {
+            shutdown: shutdown_rx,
+            activity: activity.clone(),
+            transport: transport.clone(),
+            protocol: hub_protocol.clone(),
+            transfer_format,
+            server_timeout,
+            keep_alive_interval,
+            transport_events: keepalive_events,
+            transport_close_signaled: keepalive_close_signaled,
+        };
+        let keepalive_task = tokio::spawn(run_keepalive(keepalive));
 
         Ok(Self {
             transport,
@@ -284,15 +286,30 @@ async fn process_binary(ctx: &DispatchContext, bytes: &[u8]) -> Result<(), Error
     Ok(())
 }
 
-async fn run_keepalive(
-    mut shutdown: watch::Receiver<bool>,
+struct Keepalive {
+    shutdown: watch::Receiver<bool>,
     activity: Arc<Notify>,
     transport: WebSocketTransport,
     protocol: Arc<dyn HubProtocol>,
     transfer_format: TransferFormat,
     server_timeout: Duration,
     keep_alive_interval: Duration,
-) {
+    transport_events: mpsc::UnboundedSender<TransportEvent>,
+    transport_close_signaled: Arc<AtomicBool>,
+}
+
+async fn run_keepalive(keepalive: Keepalive) {
+    let Keepalive {
+        mut shutdown,
+        activity,
+        transport,
+        protocol,
+        transfer_format,
+        server_timeout,
+        keep_alive_interval,
+        transport_events,
+        transport_close_signaled,
+    } = keepalive;
     let mut last_received = Instant::now();
     let mut next_ping_at = Instant::now() + keep_alive_interval;
 
@@ -317,6 +334,12 @@ async fn run_keepalive(
             _ = tokio::time::sleep_until(server_deadline) => {
                 if last_received.elapsed() >= server_timeout {
                     warn!("server timeout elapsed without receiving a message from the server");
+                    if !transport_close_signaled.swap(true, Ordering::Relaxed) {
+                        let _ = transport_events.send(TransportEvent::Closed(TransportCloseInfo {
+                            error: Some(SERVER_TIMEOUT_MESSAGE.into()),
+                            allow_reconnect: None,
+                        }));
+                    }
                     let _ = transport.close().await;
                     break;
                 }
