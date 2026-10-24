@@ -114,9 +114,10 @@ impl Connection {
         )?;
 
         debug!(url = %websocket_url, "starting websocket transport");
+        // `build_websocket_url` has already put the token into the URL.
         let (mut transport, mut incoming) = WebSocketTransport::connect_with_options(
             &websocket_url,
-            access_token.as_deref(),
+            None,
             WebSocketConnectOptions {
                 log_message_content: options.log_message_content,
             },
@@ -251,5 +252,60 @@ mod tests {
         let payload = format!(r#"{{"error":null}}{RECORD_SEPARATOR}"#);
         let result = parse_transport_handshake(TransportMessage::Text(payload)).unwrap();
         assert!(result.response.error.is_none());
+    }
+
+    // The `accept_hdr_async` callback signature comes from tungstenite.
+    #[allow(clippy::result_large_err)]
+    #[tokio::test]
+    async fn connect_puts_access_token_into_websocket_url_once() {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio_tungstenite::tungstenite::Message;
+        use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            // Negotiate: a POST without a body, answered with a minimal HTTP response.
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let mut byte = [0; 1];
+                stream.read_exact(&mut byte).await.unwrap();
+                request.push(byte[0]);
+            }
+            let body = r#"{"connectionId":"id","connectionToken":"token","negotiateVersion":1}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+            drop(stream);
+
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut query = String::new();
+            let mut websocket =
+                tokio_tungstenite::accept_hdr_async(stream, |request: &Request, response| {
+                    query = request.uri().query().unwrap_or_default().to_string();
+                    Ok::<Response, _>(response)
+                })
+                .await
+                .unwrap();
+            websocket.next().await.unwrap().unwrap();
+            let handshake = format!("{{}}{RECORD_SEPARATOR}");
+            websocket.send(Message::Text(handshake)).await.unwrap();
+            query
+        });
+
+        let mut options = ConnectionOptions::new(format!("http://{address}/hub"));
+        options.access_token_factory = Some(crate::access_token::factory(|| async {
+            Ok("secret".to_string())
+        }));
+        let connection = Connection::connect(options).await.unwrap();
+
+        let query = server.await.unwrap();
+        assert_eq!(query.matches("access_token=secret").count(), 1, "{query}");
+        drop(connection);
     }
 }
