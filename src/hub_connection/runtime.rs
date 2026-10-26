@@ -49,7 +49,8 @@ pub struct HubRuntime {
     message_buffer: Option<Arc<MessageBuffer>>,
     invocation_id: AtomicI64,
     cached_ping: Vec<u8>,
-    activity: Arc<Notify>,
+    /// Notified on every message sent: restarts the ping timer.
+    sent: Arc<Notify>,
     shutdown_tx: watch::Sender<bool>,
     receive_task: JoinHandle<()>,
     keepalive_task: JoinHandle<()>,
@@ -87,10 +88,11 @@ impl HubRuntime {
             .write_message(&HubMessage::Ping(PingMessage))
             .map_err(|error| Error::Protocol(error.to_string()))?;
 
-        let activity = Arc::new(Notify::new());
+        let received = Arc::new(Notify::new());
+        let sent = Arc::new(Notify::new());
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
-        let receive_activity = activity.clone();
+        let receive_activity = received.clone();
         let mut receive_shutdown = shutdown_rx.clone();
         let receive_protocol = hub_protocol.clone();
         let receive_transfer_format = transfer_format;
@@ -173,7 +175,8 @@ impl HubRuntime {
 
         let keepalive = Keepalive {
             shutdown: shutdown_rx,
-            activity: activity.clone(),
+            received,
+            sent: sent.clone(),
             transport: transport.clone(),
             protocol: hub_protocol.clone(),
             transfer_format,
@@ -191,7 +194,7 @@ impl HubRuntime {
             message_buffer,
             invocation_id: AtomicI64::new(0),
             cached_ping,
-            activity,
+            sent,
             shutdown_tx,
             receive_task,
             keepalive_task,
@@ -227,7 +230,7 @@ impl HubRuntime {
             )
             .await?;
         }
-        self.activity.notify_one();
+        self.sent.notify_one();
         Ok(backpressure)
     }
 
@@ -242,7 +245,7 @@ impl HubRuntime {
                 self.transport.send_binary(self.cached_ping.clone()).await?;
             }
         }
-        self.activity.notify_one();
+        self.sent.notify_one();
         Ok(())
     }
 
@@ -302,9 +305,14 @@ async fn process_binary(ctx: &DispatchContext, bytes: &[u8]) -> Result<(), Error
     Ok(())
 }
 
+/// Ping timer and server timeout, as in the official clients: the server timeout restarts on
+/// every message received, the ping timer on every message sent. Pinging only when the
+/// client itself is quiet keeps it alive for the server even while the server talks more
+/// often than the keep-alive interval.
 struct Keepalive {
     shutdown: watch::Receiver<bool>,
-    activity: Arc<Notify>,
+    received: Arc<Notify>,
+    sent: Arc<Notify>,
     transport: WebSocketTransport,
     protocol: Arc<dyn HubProtocol>,
     transfer_format: TransferFormat,
@@ -317,7 +325,8 @@ struct Keepalive {
 async fn run_keepalive(keepalive: Keepalive) {
     let Keepalive {
         mut shutdown,
-        activity,
+        received,
+        sent,
         transport,
         protocol,
         transfer_format,
@@ -343,8 +352,10 @@ async fn run_keepalive(keepalive: Keepalive) {
                     break;
                 }
             }
-            _ = activity.notified() => {
+            _ = received.notified() => {
                 last_received = Instant::now();
+            }
+            _ = sent.notified() => {
                 next_ping_at = Instant::now() + keep_alive_interval;
             }
             _ = tokio::time::sleep_until(server_deadline) => {

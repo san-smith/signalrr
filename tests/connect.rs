@@ -335,6 +335,63 @@ async fn client_sends_keep_alive_pings() {
     connection.close().await.unwrap();
 }
 
+/// The ping timer counts from the last message the client sent: a server that talks more often
+/// than the keep-alive interval still gets pings, or it times the client out.
+#[tokio::test]
+async fn client_pings_while_the_server_talks() {
+    let hub = FakeHub::start().await;
+    let connection = HubConnection::builder(&hub.url)
+        .with_json_protocol()
+        .with_keep_alive_interval(Duration::from_millis(200))
+        .build();
+    let mut server = connect(&hub, &connection).await;
+    // Whatever the client sent on connect, e.g. the initial ping.
+    while tokio::time::timeout(Duration::from_millis(20), server.recv_any())
+        .await
+        .is_ok()
+    {}
+
+    for _ in 0..20 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        server.send(&HubMessage::Ping(signalrr::PingMessage)).await;
+    }
+    let ping = tokio::time::timeout(Duration::from_millis(100), server.recv_any()).await;
+    assert!(
+        matches!(ping, Ok(HubMessage::Ping(_))),
+        "no ping while the server talks"
+    );
+    connection.close().await.unwrap();
+}
+
+/// The server timeout counts from the last message received: the client's own sends do not
+/// keep a silent server alive.
+#[tokio::test]
+async fn client_sends_do_not_hide_a_silent_server() {
+    let hub = FakeHub::start().await;
+    let connection = Arc::new(
+        HubConnection::builder(&hub.url)
+            .with_json_protocol()
+            .with_server_timeout(Duration::from_millis(300))
+            .build(),
+    );
+    let (closed_tx, mut closed_rx) = mpsc::unbounded_channel();
+    connection
+        .on_close(move |error| closed_tx.send(error.map(str::to_string)).unwrap())
+        .await;
+    let _server = connect(&hub, &connection).await;
+
+    let sender = connection.clone();
+    let sends = tokio::spawn(async move {
+        while sender.send("Tick", vec![]).await.is_ok() {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    });
+
+    let error = recv(&mut closed_rx).await.expect("close carries the error");
+    assert!(error.to_lowercase().contains("timeout"), "{error}");
+    sends.await.unwrap();
+}
+
 #[tokio::test]
 async fn silent_server_times_out() {
     let hub = FakeHub::start().await;
