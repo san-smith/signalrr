@@ -297,6 +297,29 @@ async fn handshake_error_fails_start() {
 }
 
 #[tokio::test]
+async fn close_aborts_a_start_that_waits_for_the_server() {
+    let hub = FakeHub::start().await;
+    let connection = Arc::new(
+        HubConnection::builder(&hub.url)
+            .with_json_protocol()
+            .build(),
+    );
+    let starting = connection.clone();
+    let start = tokio::spawn(async move { starting.start().await });
+    // The server takes the socket and never answers the handshake.
+    let mut server = hub.accept().await;
+    server.handshake_request().await;
+
+    tokio::time::timeout(Duration::from_secs(1), connection.close())
+        .await
+        .expect("close does not wait for the handshake")
+        .unwrap();
+    let started = tokio::time::timeout(TIMEOUT, start).await.unwrap().unwrap();
+    assert!(matches!(started, Err(Error::Aborted(_))), "{started:?}");
+    assert_eq!(connection.state().await, HubConnectionState::Disconnected);
+}
+
+#[tokio::test]
 async fn close_from_server_closes_the_connection() {
     let hub = FakeHub::start().await;
     let connection = HubConnection::builder(&hub.url)

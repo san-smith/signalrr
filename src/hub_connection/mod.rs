@@ -498,7 +498,16 @@ impl HubConnection {
     }
 
     async fn connect_runtime(&self) -> Result<mpsc::UnboundedReceiver<TransportEvent>, Error> {
-        let mut connection = Connection::connect(self.options.clone()).await?;
+        // `close` must not wait for a server that does not answer negotiate, the WebSocket
+        // upgrade or the handshake: it aborts them, like the official clients. Nothing of
+        // the connection is stored before this point, so dropping it leaves no state.
+        let mut stop = self.stop_reconnect.subscribe();
+        let mut connection = tokio::select! {
+            connection = Connection::connect(self.options.clone()) => connection?,
+            Ok(_) = stop.wait_for(|stop| *stop) => {
+                return Err(Error::Aborted("connection stopped during start".into()));
+            }
+        };
         *self.connection_id.write().await = connection.connection_id().map(str::to_string);
         use_connection_buffer(
             &connection,
