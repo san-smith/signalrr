@@ -43,4 +43,4 @@ The crate is developed, not rewritten.
    complete rustdoc, update the README, release `0.1.0-alpha` on crates.io. Publishing
    waits for a security review. Until then `0.1.0-alpha`
    is released as the git tag `v0.1.0-alpha` (2026-10-31, `CHANGELOG.md`). Dependencies
-   are updated (2026-10-31); rustdoc remains for the crates.io release.
+   are updated in `v0.1.0-alpha.2` (2026-10-31); rustdoc remains for the crates.io release.

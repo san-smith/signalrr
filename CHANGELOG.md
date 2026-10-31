@@ -4,7 +4,7 @@ All notable changes to this crate. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.1.0-alpha.2] - 2026-10-31
 
 ### Changed
 
@@ -48,4 +48,5 @@ stable.
 - The ping timer counts from sent messages, the server timeout from received ones.
 - `close()` aborts a `start()` that waits for the server.
 
+[0.1.0-alpha.2]: https://github.com/san-smith/signalrr/releases/tag/v0.1.0-alpha.2
 [0.1.0-alpha]: https://github.com/san-smith/signalrr/releases/tag/v0.1.0-alpha

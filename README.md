@@ -10,11 +10,11 @@ Rust client for **ASP.NET Core SignalR** with support for MessagePack and custom
 
 ## Installation
 
-`0.1.0-alpha` is not on crates.io yet; depend on the git tag:
+`0.1.0-alpha.2` is not on crates.io yet; depend on the git tag:
 
 ```toml
 [dependencies]
-signalrr = { git = "https://github.com/san-smith/signalrr", tag = "v0.1.0-alpha" }
+signalrr = { git = "https://github.com/san-smith/signalrr", tag = "v0.1.0-alpha.2" }
 ```
 
 Implemented:
@@ -138,7 +138,7 @@ sent, closing or dropping the connection. No network is needed.
 
 ```toml
 [dev-dependencies]
-signalrr = { git = "https://github.com/san-smith/signalrr", tag = "v0.1.0-alpha", features = ["test-support"] }
+signalrr = { git = "https://github.com/san-smith/signalrr", tag = "v0.1.0-alpha.2", features = ["test-support"] }
 ```
 
 ```rust
