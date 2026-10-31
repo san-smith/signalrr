@@ -325,10 +325,10 @@ mod tests {
         bus.send_stream_item(id, Ok(Value::String("done".to_string())))
             .await;
 
-        assert_eq!(rx.try_next().unwrap(), Some(Ok(Value::Number(42.into()))));
+        assert_eq!(rx.try_recv().unwrap(), Ok(Value::Number(42.into())));
         assert_eq!(
-            rx.try_next().unwrap(),
-            Some(Ok(Value::String("done".to_string())))
+            rx.try_recv().unwrap(),
+            Ok(Value::String("done".to_string()))
         );
     }
 

@@ -355,7 +355,10 @@ mod tests {
                 .unwrap();
             websocket.next().await.unwrap().unwrap();
             let handshake = format!("{{}}{RECORD_SEPARATOR}");
-            websocket.send(Message::Text(handshake)).await.unwrap();
+            websocket
+                .send(Message::Text(handshake.into()))
+                .await
+                .unwrap();
             query
         });
 

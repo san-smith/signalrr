@@ -169,7 +169,7 @@ impl WebSocketTransport {
         sender
             .lock()
             .await
-            .send(Message::Text(payload))
+            .send(Message::Text(payload.into()))
             .await
             .map_err(|error| Error::WebSocket(Box::new(error)))
     }
@@ -202,7 +202,7 @@ impl WebSocketTransport {
         sender
             .lock()
             .await
-            .send(Message::Binary(payload))
+            .send(Message::Binary(payload.into()))
             .await
             .map_err(|error| Error::WebSocket(Box::new(error)))
     }
@@ -285,7 +285,10 @@ async fn read_loop(
                     ),
                     "websocket received text data"
                 );
-                if incoming_tx.send(TransportMessage::Text(text)).is_err() {
+                if incoming_tx
+                    .send(TransportMessage::Text(text.to_string()))
+                    .is_err()
+                {
                     break;
                 }
             }
@@ -297,7 +300,10 @@ async fn read_loop(
                     ),
                     "websocket received binary data"
                 );
-                if incoming_tx.send(TransportMessage::Binary(data)).is_err() {
+                if incoming_tx
+                    .send(TransportMessage::Binary(data.into()))
+                    .is_err()
+                {
                     break;
                 }
             }

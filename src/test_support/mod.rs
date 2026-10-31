@@ -327,7 +327,7 @@ impl ServerConnection {
             Some(error) => json!({ "error": error }).to_string(),
             None => "{}".to_string(),
         };
-        self.send_frame(Message::Text(format!("{body}{RECORD_SEPARATOR}")))
+        self.send_frame(Message::Text(format!("{body}{RECORD_SEPARATOR}").into()))
             .await;
     }
 
@@ -413,15 +413,15 @@ impl ServerConnection {
         let protocol = self.protocol.clone().expect("handshake first");
         let bytes = protocol.write_message(message).unwrap();
         let frame = match protocol.transfer_format() {
-            crate::TransferFormat::Text => Message::Text(String::from_utf8(bytes).unwrap()),
-            crate::TransferFormat::Binary => Message::Binary(bytes),
+            crate::TransferFormat::Text => Message::Text(String::from_utf8(bytes).unwrap().into()),
+            crate::TransferFormat::Binary => Message::Binary(bytes.into()),
         };
         self.send_frame(frame).await;
     }
 
     /// Sends a prepared binary frame.
     pub async fn send_binary(&mut self, frame: Vec<u8>) {
-        self.send_frame(Message::Binary(frame)).await;
+        self.send_frame(Message::Binary(frame.into())).await;
     }
 
     /// Closes the WebSocket with a close frame.

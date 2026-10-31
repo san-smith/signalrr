@@ -4,6 +4,22 @@ All notable changes to this crate. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- Dependencies updated: `thiserror` 2, `tokio-tungstenite` 0.30, `reqwest` 0.13, `brotli` 9,
+  `tokio` 1.54. `reqwest` goes without default features and keeps `native-tls`, so the
+  Windows target still checks on Linux and macOS without a C toolchain.
+- Public types of these crates change with them: `with_http_client` takes a `reqwest` 0.13
+  `Client`, `Error::Http` and `Error::WebSocket` wrap the errors of `reqwest` 0.13 and
+  `tungstenite` 0.30.
+
+### Fixed
+
+- Tests no longer call `UnboundedReceiver::try_next`, deprecated in newer `futures-channel`
+  (0.3.34): CI failed on it under `-D warnings`.
+
 ## [0.1.0-alpha] - 2026-10-31
 
 First tagged release. Not published on crates.io yet: depend on the git tag. The API is not
