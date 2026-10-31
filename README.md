@@ -63,7 +63,7 @@ use signalrr::{ClientUploadStream, HubArgument, HubConnection};
 
 #[tokio::main]
 async fn main() -> Result<(), signalrr::Error> {
-    let mut connection = HubConnection::builder("https://example.com/signalr?platform=pwa")
+    let mut connection = HubConnection::builder("https://example.com/signalr?client=web")
         .with_messagepack_protocol()
         .with_automatic_reconnect()
         .with_access_token(|| async {

@@ -488,27 +488,27 @@ mod tests {
     #[test]
     fn resolve_negotiate_url_appends_negotiate_and_version() {
         let url = resolve_negotiate_url(
-            "https://example.com/signalr?platform=pwa",
+            "https://example.com/signalr?client=web",
             &NegotiateOptions::new(),
         )
         .unwrap();
 
         assert!(url.starts_with("https://example.com/signalr/negotiate?"));
-        assert!(url.contains("platform=pwa"));
+        assert!(url.contains("client=web"));
         assert!(url.contains("negotiateVersion=1"));
     }
 
     #[test]
     fn build_websocket_url_sets_id_and_scheme() {
         let url = build_websocket_url(
-            "https://example.com/signalr?platform=pwa",
+            "https://example.com/signalr?client=web",
             "connection-token",
             Some("jwt"),
         )
         .unwrap();
 
         assert!(url.starts_with("wss://example.com/signalr?"));
-        assert!(url.contains("platform=pwa"));
+        assert!(url.contains("client=web"));
         assert!(url.contains("id=connection-token"));
         assert!(url.contains("access_token=jwt"));
         assert!(!url.contains("negotiateVersion"));

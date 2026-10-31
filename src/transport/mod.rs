@@ -84,13 +84,13 @@ mod tests {
 
     #[test]
     fn redact_access_token_hides_only_the_token() {
-        let url = "wss://host/hub?cashboxId=1&id=abc&access_token=secret.jwt";
+        let url = "wss://host/hub?room=1&id=abc&access_token=secret.jwt";
         let redacted = redact_access_token(url);
         assert!(!redacted.contains("secret"), "{redacted}");
         assert!(
             redacted.contains("access_token=***") || redacted.contains("access_token=%2A%2A%2A")
         );
-        assert!(redacted.contains("id=abc") && redacted.contains("cashboxId=1"));
+        assert!(redacted.contains("id=abc") && redacted.contains("room=1"));
         assert_eq!(
             redact_access_token("wss://host/hub?id=abc"),
             "wss://host/hub?id=abc"
