@@ -41,4 +41,6 @@ The crate is developed, not rewritten.
    reviewer.
 6. **Release prep.** Update dependencies (`tokio-tungstenite`, `thiserror` 2, `brotli`),
    complete rustdoc, update the README, release `0.1.0-alpha` on crates.io. Publishing
-   waits for a security sign-off from the first consumer's team.
+   waits for a security sign-off from the first consumer's team. Until then `0.1.0-alpha`
+   is released as the git tag `v0.1.0-alpha` (2026-10-31, `CHANGELOG.md`); the dependency
+   updates and rustdoc remain for the crates.io release.

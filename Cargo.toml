@@ -1,6 +1,6 @@
 [package]
 name = "signalrr"
-version = "0.0.0"
+version = "0.1.0-alpha"
 edition = "2024"
 description = "Rust client for ASP.NET Core SignalR with MessagePack and custom protocol support"
 repository = "https://github.com/san-smith/signalrr"
